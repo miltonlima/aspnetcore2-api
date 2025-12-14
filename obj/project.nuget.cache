@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "JM8+lESTOOs=",
+  "success": true,
+  "projectFilePath": "C:\\temp\\aspnetcore2-api\\aspnetcore2-api.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\milto\\.nuget\\packages\\microsoft.aspnetcore.openapi\\9.0.10\\microsoft.aspnetcore.openapi.9.0.10.nupkg.sha512",
+    "C:\\Users\\milto\\.nuget\\packages\\microsoft.openapi\\1.6.17\\microsoft.openapi.1.6.17.nupkg.sha512"
+  ],
+  "logs": []
+}
