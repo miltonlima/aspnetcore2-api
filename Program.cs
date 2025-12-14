@@ -1,6 +1,8 @@
+// Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+// Define política de CORS para permitir que o frontend Vite consuma a API localmente.
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
@@ -10,17 +12,22 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod();
     });
 });
+// Registra geradores de documentação OpenAPI (Swagger).
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Constrói o pipeline de requisições a partir dos serviços definidos.
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
+// Publica o JSON OpenAPI e a interface do Swagger UI.
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Força redirecionamento para HTTPS quando disponível.
 app.UseHttpsRedirection();
 
+// Aplica a política de CORS nomeada para liberar chamadas do frontend.
 app.UseCors("AllowFrontend");
 
 var summaries = new[]
@@ -28,6 +35,7 @@ var summaries = new[]
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
 };
 
+// Endpoint mínimo que devolve 5 registros de previsão climática com valores aleatórios.
 app.MapGet("/weatherforecast", () =>
 {
     var forecast =  Enumerable.Range(1, 5).Select(index =>
@@ -42,8 +50,10 @@ app.MapGet("/weatherforecast", () =>
 })
 .WithName("GetWeatherForecast");
 
+// Inicia o servidor web e bloqueia o thread principal.
 app.Run();
 
+// Record imutável que representa uma previsão e calcula a temperatura em Fahrenheit.
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
