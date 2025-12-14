@@ -31,3 +31,6 @@ C:\temp\aspnetcore2-api\obj\Debug\net9.0\refint\aspnetcore2-api.dll
 C:\temp\aspnetcore2-api\obj\Debug\net9.0\aspnetcore2-api.pdb
 C:\temp\aspnetcore2-api\obj\Debug\net9.0\aspnetcore2-api.genruntimeconfig.cache
 C:\temp\aspnetcore2-api\obj\Debug\net9.0\ref\aspnetcore2-api.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.Swagger.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerGen.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerUI.dll
