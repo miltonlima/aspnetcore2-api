@@ -50,6 +50,20 @@ app.MapGet("/weatherforecast", () =>
 })
 .WithName("GetWeatherForecast");
 
+// Endpoint que gera 6 números aleatórios entre 1 e 60 sem repetição.
+app.MapGet("/lottery", () =>
+{
+    var numbers = new HashSet<int>();
+    while (numbers.Count < 6)
+    {
+        numbers.Add(Random.Shared.Next(1, 61));
+    }
+    return numbers
+        .OrderBy(value => value)
+        .ToArray();
+})
+.WithName("GetLotteryNumbers");
+
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
 
@@ -58,3 +72,7 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
+
+
+
+
