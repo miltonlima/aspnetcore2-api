@@ -35,7 +35,7 @@ var summaries = new[]
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
 };
 
-// Endpoint mínimo que devolve 5 registros de previsão climática com valores aleatórios.
+// Endpoint mínimo que devolve 3 registros de previsão climática com valores aleatórios.
 app.MapGet("/weatherforecast", () =>
 {
     var forecast =  Enumerable.Range(1, 3).Select(index =>
