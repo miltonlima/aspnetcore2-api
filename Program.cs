@@ -1,76 +1,64 @@
-// Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
+// Identificador reutilizável para a política de CORS liberando o frontend Vite.
+const string FrontendCorsPolicy = "AllowFrontend";
+
+// Cria o builder padrão do ASP.NET Core carregando configuração e DI.
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Define política de CORS para permitir que o frontend Vite consuma a API localmente.
+// Configura CORS permitindo chamadas do frontend hospedado em http/https://localhost:5173.
 builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowFrontend", policy =>
-    {
+    options.AddPolicy(FrontendCorsPolicy, policy =>
         policy.WithOrigins("http://localhost:5173", "https://localhost:5173")
               .AllowAnyHeader()
-              .AllowAnyMethod();
-    });
-});
-// Registra geradores de documentação OpenAPI (Swagger).
+              .AllowAnyMethod()));
+
+// Registra infraestrutura para expor documentação Swagger/OpenAPI.
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Constrói o pipeline de requisições a partir dos serviços definidos.
+// Constrói o pipeline a partir dos serviços configurados.
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-// Publica o JSON OpenAPI e a interface do Swagger UI.
+// Publica JSON e UI do Swagger para inspecionar a API.
 app.UseSwagger();
 app.UseSwaggerUI();
-
-// Força redirecionamento para HTTPS quando disponível.
+// Redireciona requisições HTTP para HTTPS quando suportado.
 app.UseHttpsRedirection();
+// Aplica a política de CORS configurada anteriormente.
+app.UseCors(FrontendCorsPolicy);
 
-// Aplica a política de CORS nomeada para liberar chamadas do frontend.
-app.UseCors("AllowFrontend");
-
+// Lista de descrições climáticas que alimenta o endpoint de forecast.
 var summaries = new[]
 {
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
 };
 
-// Endpoint mínimo que devolve 5 registros de previsão climática com valores aleatórios.
+// Minimal API que gera cinco previsões com datas futuras e dados aleatórios.
 app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
+    Enumerable.Range(1, 5)
+        .Select(day => new WeatherForecast(
+            DateOnly.FromDateTime(DateTime.Now.AddDays(day)),
             Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+            summaries[Random.Shared.Next(summaries.Length)]))
+        .ToArray())
+.WithName("GetWeatherForecast")
+.WithOpenApi();
 
-// Endpoint que gera 6 números aleatórios entre 1 e 60 sem repetição.
+// Endpoint que sorteia seis números únicos entre 1 e 60 para uma loteria simples.
 app.MapGet("/lottery", () =>
-{
-    var numbers = new HashSet<int>();
-    while (numbers.Count < 6)
-    {
-        numbers.Add(Random.Shared.Next(1, 61));
-    }
-    return numbers
-        .OrderBy(value => value)
-        .ToArray();
-})
-.WithName("GetLotteryNumbers");
+    Random.Shared
+        .GetItems(Enumerable.Range(1, 60).ToArray(), 6)
+        .Order()
+        .ToArray())
+.WithName("GetLotteryNumbers")
+.WithOpenApi();
 
-// Inicia o servidor web e bloqueia o thread principal.
+// Inicia o servidor web e bloqueia até que seja interrompido.
 app.Run();
 
-// Record imutável que representa uma previsão e calcula a temperatura em Fahrenheit.
+// Record que representa cada previsão climática incluindo conversão para Fahrenheit.
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    public int TemperatureF => (int)Math.Round(TemperatureC * 9 / 5.0 + 32);
 }
 
 
