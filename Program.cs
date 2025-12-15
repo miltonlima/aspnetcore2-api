@@ -56,6 +56,7 @@ app.MapGet("/lottery", () =>
     var numbers = new HashSet<int>();
     while (numbers.Count < 6)
     {
+        // Adiciona ao conjunto um número aleatório entre 1 e 60, evitando duplicatas.
         numbers.Add(Random.Shared.Next(1, 61));
     }
     return numbers
@@ -67,7 +68,7 @@ app.MapGet("/lottery", () =>
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
 
-// Record imutável que representa uma previsão e calcula a temperatura em Fahrenheit.
+// Record imutável que guarda data, temperatura em Celsius e descrição; a propriedade calculada converte o valor para Fahrenheit usando a fórmula tradicional.
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
