@@ -65,6 +65,10 @@ app.MapGet("/lottery", () =>
 })
 .WithName("GetLotteryNumbers");
 
+// Endpoint de teste simples que retorna uma string.
+app.MapGet("/ping", () => "pong").WithName("Ping");
+
+
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
 
