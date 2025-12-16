@@ -30,6 +30,9 @@ app.UseHttpsRedirection();
 // Aplica a política de CORS nomeada para liberar chamadas do frontend.
 app.UseCors("AllowFrontend");
 
+// Endpoint de teste simples que retorna uma string.
+app.MapGet("/ping", () => "<strong>Vindo da API!</strong>").WithName("Ping");
+
 var summaries = new[]
 {
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
@@ -64,10 +67,6 @@ app.MapGet("/lottery", () =>
         .ToArray();
 })
 .WithName("GetLotteryNumbers");
-
-// Endpoint de teste simples que retorna uma string.
-app.MapGet("/ping", () => "pong").WithName("Ping");
-
 
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
