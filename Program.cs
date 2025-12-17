@@ -33,6 +33,9 @@ app.UseCors("AllowFrontend");
 // Endpoint de teste simples que retorna uma string.
 app.MapGet("/ping", () => "Vim da API!").WithName("Ping");
 
+// Endpoint de teste simples que retorna uma soma.
+app.MapGet("/soma", () => 2 + 2).WithName("Soma");
+
 var summaries = new[]
 {
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
