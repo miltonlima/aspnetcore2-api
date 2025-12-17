@@ -30,6 +30,31 @@ app.UseHttpsRedirection();
 // Aplica a política de CORS nomeada para liberar chamadas do frontend.
 app.UseCors("AllowFrontend");
 
+
+// Endpoint que recebe dois valores e informa qual deles é maior.
+app.MapGet("/comparar", (int primeiro, int segundo) =>
+{
+    if (primeiro == segundo)
+    {
+        return Results.Ok(new
+        {
+            mensagem = "Os dois números são iguais.",
+            maior = primeiro,
+            valores = new[] { primeiro, segundo }
+        });
+    }
+
+    var maior = Math.Max(primeiro, segundo);
+    var menor = Math.Min(primeiro, segundo);
+
+    return Results.Ok(new
+    {
+        mensagem = $"O maior número é {maior}.",
+        maior,
+        menor
+    });
+}).WithName("Comparar");
+
 // Endpoint de teste simples que retorna uma string.
 app.MapGet("/texto", () => "Vim da API!").WithName("Texto");
 
