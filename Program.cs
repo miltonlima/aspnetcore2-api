@@ -31,7 +31,7 @@ app.UseHttpsRedirection();
 app.UseCors("AllowFrontend");
 
 // Endpoint de teste simples que retorna uma string.
-app.MapGet("/ping", () => "Vim da API!").WithName("Ping");
+app.MapGet("/texto", () => "Vim da API!").WithName("Texto");
 
 // Endpoint de teste simples que retorna uma soma.
 app.MapGet("/soma", () => 2 + 3).WithName("Soma");
