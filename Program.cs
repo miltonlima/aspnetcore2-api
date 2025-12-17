@@ -34,7 +34,7 @@ app.UseCors("AllowFrontend");
 app.MapGet("/ping", () => "Vim da API!").WithName("Ping");
 
 // Endpoint de teste simples que retorna uma soma.
-app.MapGet("/soma", () => 2 + 2).WithName("Soma");
+app.MapGet("/soma", () => 2 + 3).WithName("Soma");
 
 var summaries = new[]
 {
