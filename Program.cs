@@ -30,6 +30,8 @@ app.UseHttpsRedirection();
 // Aplica a política de CORS nomeada para liberar chamadas do frontend.
 app.UseCors("AllowFrontend");
 
+// Endpoint de teste simples que retorna uma string.
+app.MapGet("/texto", () => "Vim da API!").WithName("Texto");
 
 // Endpoint que recebe dois valores e informa qual deles é maior.
 app.MapGet("/comparar", (int primeiro, int segundo) =>
@@ -54,9 +56,6 @@ app.MapGet("/comparar", (int primeiro, int segundo) =>
         menor
     });
 }).WithName("Comparar");
-
-// Endpoint de teste simples que retorna uma string.
-app.MapGet("/texto", () => "Vim da API!").WithName("Texto");
 
 // Endpoint de teste simples que retorna uma soma.
 app.MapGet("/soma", () => 2 + 3).WithName("Soma");
