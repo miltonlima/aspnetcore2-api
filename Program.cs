@@ -65,6 +65,16 @@ var summaries = new[]
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
 };
 
+// Lista simples de 5 e-mails para comparação com o front-end
+var allowedEmails = new[]
+{
+    "teste1@example.com",
+    "usuario2@example.com",
+    "cliente3@example.com",
+    "contato4@example.com",
+    "admin5@example.com"
+};
+
 // Endpoint mínimo que devolve 3 registros de previsão climática com valores aleatórios.
 app.MapGet("/weatherforecast", () =>
 {
@@ -94,6 +104,44 @@ app.MapGet("/lottery", () =>
         .ToArray();
 })
 .WithName("GetLotteryNumbers");
+// Endpoint que recebe nome, data de nascimento e e-mail do formulário (App8.jsx),
+// informa se a pessoa é maior de idade e se o e-mail está presente na lista de 5 e-mails.
+app.MapPost("/validar-pessoa", (PersonSubmission submission) =>
+{
+    if (string.IsNullOrWhiteSpace(submission.Name) ||
+        string.IsNullOrWhiteSpace(submission.BirthDate) ||
+        string.IsNullOrWhiteSpace(submission.Email))
+    {
+        return Results.BadRequest(new { mensagem = "Todos os campos (name, birthDate, email) são obrigatórios." });
+    }
+
+    // Parse flexível da data enviada pelo input type=date do frontend
+    if (!DateTime.TryParse(submission.BirthDate, out var birthDate))
+    {
+        return Results.BadRequest(new { mensagem = "Formato de data inválido. Use YYYY-MM-DD." });
+    }
+
+    var today = DateTime.Today;
+    var age = today.Year - birthDate.Year;
+    if (birthDate > today.AddYears(-age)) age--;
+
+    var isAdult = age >= 18;
+
+    var emailExists = allowedEmails.Any(e => string.Equals(e, submission.Email, StringComparison.OrdinalIgnoreCase));
+
+    return Results.Ok(new
+    {
+        mensagem = "Validação concluída.",
+        nome = submission.Name,
+        idade = age,
+        maiorDeIdade = isAdult,
+        emailExistente = emailExists
+    });
+})
+.WithName("ValidarPessoa");
+
+
+
 
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
@@ -103,6 +151,7 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
+record PersonSubmission(string Name, string BirthDate, string Email);
 
 
 
