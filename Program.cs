@@ -1,3 +1,5 @@
+using System.Globalization;
+
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
 var builder = WebApplication.CreateBuilder(args);
 
@@ -116,9 +118,18 @@ app.MapPost("/validar-pessoa", (PersonSubmission submission) =>
     }
 
     // Parse flexível da data enviada pelo input type=date do frontend
-    if (!DateTime.TryParse(submission.BirthDate, out var birthDate))
+    DateTime birthDate;
+    if (!DateTime.TryParse(submission.BirthDate, out birthDate))
     {
-        return Results.BadRequest(new { mensagem = "Formato de data inválido. Use YYYY-MM-DD." });
+        // Tenta formatos comuns: dd/MM/yyyy (frontend) ou yyyy-MM-dd (ISO)
+        if (!DateTime.TryParseExact(submission.BirthDate,
+                                    new[] { "dd/MM/yyyy", "yyyy-MM-dd" },
+                                    CultureInfo.InvariantCulture,
+                                    DateTimeStyles.None,
+                                    out birthDate))
+        {
+            return Results.BadRequest(new { mensagem = "Formato de data inválido. Use dd/MM/yyyy ou yyyy-MM-dd." });
+        }
     }
 
     var today = DateTime.Today;
@@ -151,6 +162,7 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
+record PersonSubmission(string Name, string BirthDate, string Email);
 
 
 
