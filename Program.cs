@@ -108,87 +108,55 @@ app.MapGet("/lottery", () =>
 .WithName("GetLotteryNumbers");
 // Endpoint que recebe nome, data de nascimento e e-mail do formulário (App8.jsx),
 // informa se a pessoa é maior de idade e se o e-mail está presente na lista de 5 e-mails.
-app.MapPost("/validar-pessoa", (PersonSubmission submission) =>
+app.MapPost("/validar-pessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmission submission) =>
 {
-    if (string.IsNullOrWhiteSpace(submission.Name) ||
-        string.IsNullOrWhiteSpace(submission.BirthDate) ||
-        string.IsNullOrWhiteSpace(submission.Email))
+    try
     {
-        return Results.BadRequest(new { mensagem = "Todos os campos (name, birthDate, email) são obrigatórios." });
-    }
-
-    // Parse flexível da data enviada pelo input type=date do frontend
-    if (!DateTime.TryParse(submission.BirthDate, out var birthDate))
-    {
-        return Results.BadRequest(new { mensagem = "Formato de data inválido. Use YYYY-MM-DD." });
-    }
-        app.MapPost("/validar-pessoa", (PersonSubmission submission) =>
+        if (submission == null || string.IsNullOrWhiteSpace(submission.Name) ||
+            string.IsNullOrWhiteSpace(submission.BirthDate) ||
+            string.IsNullOrWhiteSpace(submission.Email))
         {
-            try
+            return Results.BadRequest(new { mensagem = "Todos os campos (Name, BirthDate, Email) são obrigatórios." });
+        }
+
+        // Parse flexível da data enviada pelo frontend (input type=date envia yyyy-MM-dd)
+        DateTime birthDate;
+        if (!DateTime.TryParse(submission.BirthDate, out birthDate))
+        {
+            // Tenta formatos comuns: dd/MM/yyyy (frontend formatado) ou yyyy-MM-dd (ISO)
+            if (!DateTime.TryParseExact(submission.BirthDate,
+                                        new[] { "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy" },
+                                        CultureInfo.InvariantCulture,
+                                        DateTimeStyles.None,
+                                        out birthDate))
             {
-                if (string.IsNullOrWhiteSpace(submission.Name) ||
-                    string.IsNullOrWhiteSpace(submission.BirthDate) ||
-                    string.IsNullOrWhiteSpace(submission.Email))
-                {
-                    return Results.BadRequest(new { mensagem = "Todos os campos (name, birthDate, email) são obrigatórios." });
-                }
-
-                // Parse flexível da data enviada pelo input type=date do frontend
-                DateTime birthDate;
-                if (!DateTime.TryParse(submission.BirthDate, out birthDate))
-                {
-                    // Tenta formatos comuns: dd/MM/yyyy (frontend) ou yyyy-MM-dd (ISO)
-                    if (!DateTime.TryParseExact(submission.BirthDate,
-                                                new[] { "dd/MM/yyyy", "yyyy-MM-dd" },
-                                                CultureInfo.InvariantCulture,
-                                                DateTimeStyles.None,
-                                                out birthDate))
-                    {
-                        return Results.BadRequest(new { mensagem = "Formato de data inválido. Use dd/MM/yyyy ou yyyy-MM-dd." });
-                    }
-                }
-
-                var today = DateTime.Today;
-                var age = today.Year - birthDate.Year;
-                if (birthDate > today.AddYears(-age)) age--;
-
-                var isAdult = age >= 18;
-
-                var emailExists = allowedEmails.Any(e => string.Equals(e, submission.Email, StringComparison.OrdinalIgnoreCase));
-
-                return Results.Ok(new
-                {
-                    mensagem = "Validação concluída.",
-                    nome = submission.Name,
-                    idade = age,
-                    maiorDeIdade = isAdult,
-                    emailExistente = emailExists
-                });
+                return Results.BadRequest(new { mensagem = "Formato de data inválido. Use dd/MM/yyyy ou yyyy-MM-dd." });
             }
-            catch (Exception ex)
-            {
-                // Retorna detalhes da exceção em JSON para facilitar debug (remover em produção)
-                return Results.Problem(detail: ex.ToString(), title: "Internal Server Error");
-            }
-        })
-        .WithName("ValidarPessoa");
+        }
 
-    var today = DateTime.Today;
-    var age = today.Year - birthDate.Year;
-    if (birthDate > today.AddYears(-age)) age--;
+        var today = DateTime.Today;
+        var age = today.Year - birthDate.Year;
+        if (birthDate > today.AddYears(-age)) age--;
 
-    var isAdult = age >= 18;
+        var isAdult = age >= 18;
 
-    var emailExists = allowedEmails.Any(e => string.Equals(e, submission.Email, StringComparison.OrdinalIgnoreCase));
+        var emailExists = allowedEmails.Any(e => string.Equals(e, submission.Email, StringComparison.OrdinalIgnoreCase));
 
-    return Results.Ok(new
+        return Results.Ok(new
+        {
+            mensagem = "Validação concluída.",
+            nome = submission.Name,
+            idade = age,
+            maiorDeIdade = isAdult,
+            emailExistente = emailExists
+        });
+    }
+    catch (Exception ex)
     {
-        mensagem = "Validação concluída.",
-        nome = submission.Name,
-        idade = age,
-        maiorDeIdade = isAdult,
-        emailExistente = emailExists
-    });
+        // Retorna detalhes da exceção em JSON para facilitar debug
+        System.Console.WriteLine($"Erro em /validar-pessoa: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: $"Erro: {ex.Message}", title: "Internal Server Error", statusCode: 500);
+    }
 })
 .WithName("ValidarPessoa");
 
