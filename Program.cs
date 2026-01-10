@@ -118,19 +118,60 @@ app.MapPost("/validar-pessoa", (PersonSubmission submission) =>
     }
 
     // Parse flexível da data enviada pelo input type=date do frontend
-    DateTime birthDate;
-    if (!DateTime.TryParse(submission.BirthDate, out birthDate))
+    if (!DateTime.TryParse(submission.BirthDate, out var birthDate))
     {
-        // Tenta formatos comuns: dd/MM/yyyy (frontend) ou yyyy-MM-dd (ISO)
-        if (!DateTime.TryParseExact(submission.BirthDate,
-                                    new[] { "dd/MM/yyyy", "yyyy-MM-dd" },
-                                    CultureInfo.InvariantCulture,
-                                    DateTimeStyles.None,
-                                    out birthDate))
-        {
-            return Results.BadRequest(new { mensagem = "Formato de data inválido. Use dd/MM/yyyy ou yyyy-MM-dd." });
-        }
+        return Results.BadRequest(new { mensagem = "Formato de data inválido. Use YYYY-MM-DD." });
     }
+        app.MapPost("/validar-pessoa", (PersonSubmission submission) =>
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(submission.Name) ||
+                    string.IsNullOrWhiteSpace(submission.BirthDate) ||
+                    string.IsNullOrWhiteSpace(submission.Email))
+                {
+                    return Results.BadRequest(new { mensagem = "Todos os campos (name, birthDate, email) são obrigatórios." });
+                }
+
+                // Parse flexível da data enviada pelo input type=date do frontend
+                DateTime birthDate;
+                if (!DateTime.TryParse(submission.BirthDate, out birthDate))
+                {
+                    // Tenta formatos comuns: dd/MM/yyyy (frontend) ou yyyy-MM-dd (ISO)
+                    if (!DateTime.TryParseExact(submission.BirthDate,
+                                                new[] { "dd/MM/yyyy", "yyyy-MM-dd" },
+                                                CultureInfo.InvariantCulture,
+                                                DateTimeStyles.None,
+                                                out birthDate))
+                    {
+                        return Results.BadRequest(new { mensagem = "Formato de data inválido. Use dd/MM/yyyy ou yyyy-MM-dd." });
+                    }
+                }
+
+                var today = DateTime.Today;
+                var age = today.Year - birthDate.Year;
+                if (birthDate > today.AddYears(-age)) age--;
+
+                var isAdult = age >= 18;
+
+                var emailExists = allowedEmails.Any(e => string.Equals(e, submission.Email, StringComparison.OrdinalIgnoreCase));
+
+                return Results.Ok(new
+                {
+                    mensagem = "Validação concluída.",
+                    nome = submission.Name,
+                    idade = age,
+                    maiorDeIdade = isAdult,
+                    emailExistente = emailExists
+                });
+            }
+            catch (Exception ex)
+            {
+                // Retorna detalhes da exceção em JSON para facilitar debug (remover em produção)
+                return Results.Problem(detail: ex.ToString(), title: "Internal Server Error");
+            }
+        })
+        .WithName("ValidarPessoa");
 
     var today = DateTime.Today;
     var age = today.Year - birthDate.Year;
