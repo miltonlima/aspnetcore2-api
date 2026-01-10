@@ -108,7 +108,7 @@ app.MapGet("/lottery", () =>
 .WithName("GetLotteryNumbers");
 // Endpoint que recebe nome, data de nascimento e e-mail do formulário (App8.jsx),
 // informa se a pessoa é maior de idade e se o e-mail está presente na lista de 5 e-mails.
-app.MapPost("/validar-pessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmission submission) =>
+app.MapPost("/validarpessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmission submission) =>
 {
     try
     {
