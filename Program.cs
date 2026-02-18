@@ -1,8 +1,19 @@
 using System.Globalization;
-using System.Threading;
+using Npgsql;
 
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
 var builder = WebApplication.CreateBuilder(args);
+
+// Supabase Postgres connection string (set SUPABASE_DB_URL or ConnectionStrings:Supabase).
+var supabaseConnString = builder.Configuration["SUPABASE_DB_URL"]
+    ?? builder.Configuration.GetConnectionString("Supabase");
+
+if (string.IsNullOrWhiteSpace(supabaseConnString))
+{
+    throw new InvalidOperationException("Defina SUPABASE_DB_URL ou ConnectionStrings:Supabase para conectar ao banco.");
+}
+
+builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(supabaseConnString));
 
 // Add services to the container.
 // Define política de CORS para permitir que o frontend Vite consuma a API localmente.
@@ -21,6 +32,8 @@ builder.Services.AddSwaggerGen();
 
 // Constrói o pipeline de requisições a partir dos serviços definidos.
 var app = builder.Build();
+
+var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 
 // Configure the HTTP request pipeline.
 // Publica o JSON OpenAPI e a interface do Swagger UI.
@@ -68,15 +81,7 @@ var summaries = new[]
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
 };
 
-// Lista in-memory para CRUD simples de instrumentos (demo).
-var instruments = new List<Instrument>
-{
-    new(1, "Piano"),
-    new(2, "Violão"),
-    new(3, "Bateria")
-};
-var nextInstrumentId = instruments.Count;
-var instrumentsLock = new object();
+// OBS: CRUD de instrumentos agora consulta o Postgres do Supabase.
 
 // Lista simples de 5 e-mails para comparação com o front-end
 var allowedEmails = new[]
@@ -172,64 +177,7 @@ app.MapPost("/validarpessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmiss
 .WithName("ValidarPessoa");
 
 // CRUD minimalista de instrumentos via API REST.
-app.MapGet("/api/instruments", () =>
-{
-    lock (instrumentsLock)
-    {
-        return Results.Ok(instruments.ToList());
-    }
-}).WithName("ListInstruments");
 
-app.MapPost("/api/instruments", (InstrumentCreate payload) =>
-{
-    // Valida entrada, cria um novo Instrument em memória com id incremental e devolve 201 Created com o recurso.
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
-    {
-        return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
-    }
-
-    var name = payload.Name.Trim();
-    Instrument created;
-    lock (instrumentsLock)
-    {
-        var id = Interlocked.Increment(ref nextInstrumentId);
-        created = new Instrument(id, name);
-        instruments.Add(created);
-    }
-
-    return Results.Created($"/api/instruments/{created.Id}", created);
-}).WithName("CreateInstrument");
-
-app.MapPut("/api/instruments/{id:int}", (int id, InstrumentCreate payload) =>
-{
-    // Atualiza um instrumento existente (valida nome, garante existência pelo id, troca o registro na lista em memória e retorna 200 com o objeto atualizado).
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
-    {
-        return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
-    }
-
-    lock (instrumentsLock)
-    {
-        var index = instruments.FindIndex(x => x.Id == id);
-        if (index < 0)
-        {
-            return Results.NotFound();
-        }
-
-        var updated = new Instrument(id, payload.Name.Trim());
-        instruments[index] = updated;
-        return Results.Ok(updated);
-    }
-}).WithName("UpdateInstrument");
-
-app.MapDelete("/api/instruments/{id:int}", (int id) =>
-{
-    lock (instrumentsLock)
-    {
-        var removed = instruments.RemoveAll(x => x.Id == id) > 0;
-        return removed ? Results.NoContent() : Results.NotFound();
-    }
-}).WithName("DeleteInstrument");
 
 
 
@@ -244,7 +192,6 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 }
 record PersonSubmission(string Name, string BirthDate, string Email);
 record Instrument(int Id, string Name);
-record InstrumentCreate(string Name);
 
 
 

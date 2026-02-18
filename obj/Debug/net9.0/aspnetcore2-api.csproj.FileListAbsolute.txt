@@ -34,3 +34,4 @@ C:\temp\aspnetcore2-api\obj\Debug\net9.0\ref\aspnetcore2-api.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.Swagger.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerGen.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerUI.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Npgsql.dll
