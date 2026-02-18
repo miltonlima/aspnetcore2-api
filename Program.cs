@@ -182,6 +182,7 @@ app.MapGet("/api/instruments", () =>
 
 app.MapPost("/api/instruments", (InstrumentCreate payload) =>
 {
+    // Valida entrada, cria um novo Instrument em memória com id incremental e devolve 201 Created com o recurso.
     if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
     {
         return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
@@ -201,6 +202,7 @@ app.MapPost("/api/instruments", (InstrumentCreate payload) =>
 
 app.MapPut("/api/instruments/{id:int}", (int id, InstrumentCreate payload) =>
 {
+    // Atualiza um instrumento existente (valida nome, garante existência pelo id, troca o registro na lista em memória e retorna 200 com o objeto atualizado).
     if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
     {
         return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
