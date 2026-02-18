@@ -1,6 +1,9 @@
 using System.Globalization;
 using Npgsql;
 
+// Força uso de IPv4 (evita falha de conexão quando IPv6 não está acessível no host).
+AppContext.SetSwitch("System.Net.DisableIPv6", true);
+
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
 var builder = WebApplication.CreateBuilder(args);
 
