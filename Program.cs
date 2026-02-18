@@ -21,9 +21,15 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "https://localhost:5173", "https://reactvite2-app.pages.dev")
-              .AllowAnyHeader()
-              .AllowAnyMethod();
+        policy
+            .WithOrigins(
+                "http://localhost:5173",
+                "https://localhost:5173",
+                "https://reactvite2-app.pages.dev",
+                "https://aspnetcore2-api.onrender.com"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod();
     });
 });
 // Registra geradores de documentação OpenAPI (Swagger).
@@ -35,6 +41,9 @@ var app = builder.Build();
 
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 
+// Aplica CORS antes de demais middlewares para garantir cabeçalhos em erros.
+app.UseCors("AllowFrontend");
+
 // Configure the HTTP request pipeline.
 // Publica o JSON OpenAPI e a interface do Swagger UI.
 app.UseSwagger();
@@ -42,9 +51,6 @@ app.UseSwaggerUI();
 
 // Força redirecionamento para HTTPS quando disponível.
 app.UseHttpsRedirection();
-
-// Aplica a política de CORS nomeada para liberar chamadas do frontend.
-app.UseCors("AllowFrontend");
 
 // Endpoint de teste simples que retorna uma string.
 app.MapGet("/texto", () => "Vim da API!").WithName("Texto");
@@ -179,14 +185,22 @@ app.MapPost("/validarpessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmiss
 // CRUD minimalista de instrumentos via API REST.
 app.MapGet("/api/instruments", async () =>
 {
-    var items = new List<Instrument>();
-    await using var cmd = dataSource.CreateCommand("select id, name from instruments order by id");
-    await using var reader = await cmd.ExecuteReaderAsync();
-    while (await reader.ReadAsync())
+    try
     {
-        items.Add(new Instrument(reader.GetInt32(0), reader.GetString(1)));
+        var items = new List<Instrument>();
+        await using var cmd = dataSource.CreateCommand("select id, name from instruments order by id");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new Instrument(reader.GetInt32(0), reader.GetString(1)));
+        }
+        return Results.Ok(items);
     }
-    return Results.Ok(items);
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/instruments: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
 }).WithName("ListInstruments");
 
 app.MapPost("/api/instruments", async (InstrumentCreate payload) =>
@@ -197,16 +211,24 @@ app.MapPost("/api/instruments", async (InstrumentCreate payload) =>
         return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
     }
 
-    var name = payload.Name.Trim();
-    await using var cmd = dataSource.CreateCommand("insert into instruments(name) values (@name) returning id, name");
-    cmd.Parameters.AddWithValue("@name", name);
-    await using var reader = await cmd.ExecuteReaderAsync();
-    if (!await reader.ReadAsync())
+    try
     {
-        return Results.Problem("Falha ao inserir instrumento.");
+        var name = payload.Name.Trim();
+        await using var cmd = dataSource.CreateCommand("insert into instruments(name) values (@name) returning id, name");
+        cmd.Parameters.AddWithValue("@name", name);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao inserir instrumento.");
+        }
+        var created = new Instrument(reader.GetInt32(0), reader.GetString(1));
+        return Results.Created($"/api/instruments/{created.Id}", created);
     }
-    var created = new Instrument(reader.GetInt32(0), reader.GetString(1));
-    return Results.Created($"/api/instruments/{created.Id}", created);
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/instruments: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
 }).WithName("CreateInstrument");
 
 app.MapPut("/api/instruments/{id:int}", async (int id, InstrumentCreate payload) =>
@@ -217,25 +239,41 @@ app.MapPut("/api/instruments/{id:int}", async (int id, InstrumentCreate payload)
         return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
     }
 
-    await using var cmd = dataSource.CreateCommand("update instruments set name = @name where id = @id returning id, name");
-    cmd.Parameters.AddWithValue("@id", id);
-    cmd.Parameters.AddWithValue("@name", payload.Name.Trim());
-    await using var reader = await cmd.ExecuteReaderAsync();
-    if (!await reader.ReadAsync())
+    try
     {
-        return Results.NotFound();
-    }
+        await using var cmd = dataSource.CreateCommand("update instruments set name = @name where id = @id returning id, name");
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@name", payload.Name.Trim());
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound();
+        }
 
-    var updated = new Instrument(reader.GetInt32(0), reader.GetString(1));
-    return Results.Ok(updated);
+        var updated = new Instrument(reader.GetInt32(0), reader.GetString(1));
+        return Results.Ok(updated);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro PUT /api/instruments/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
 }).WithName("UpdateInstrument");
 
 app.MapDelete("/api/instruments/{id:int}", async (int id) =>
 {
-    await using var cmd = dataSource.CreateCommand("delete from instruments where id = @id");
-    cmd.Parameters.AddWithValue("@id", id);
-    var rows = await cmd.ExecuteNonQueryAsync();
-    return rows > 0 ? Results.NoContent() : Results.NotFound();
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from instruments where id = @id");
+        cmd.Parameters.AddWithValue("@id", id);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/instruments/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
 }).WithName("DeleteInstrument");
 
 
