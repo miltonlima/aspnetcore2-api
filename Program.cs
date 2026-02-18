@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Threading;
 
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
 var builder = WebApplication.CreateBuilder(args);
@@ -66,6 +67,16 @@ var summaries = new[]
 {
     "Congelante", "Revigorante", "Frio", "Ameno", "Quente", "Agradável", "Calor", "Escalante", "Torrente", "Abrasador"
 };
+
+// Lista in-memory para CRUD simples de instrumentos (demo).
+var instruments = new List<Instrument>
+{
+    new(1, "Piano"),
+    new(2, "Violão"),
+    new(3, "Bateria")
+};
+var nextInstrumentId = instruments.Count;
+var instrumentsLock = new object();
 
 // Lista simples de 5 e-mails para comparação com o front-end
 var allowedEmails = new[]
@@ -160,6 +171,64 @@ app.MapPost("/validarpessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmiss
 })
 .WithName("ValidarPessoa");
 
+// CRUD minimalista de instrumentos via API REST.
+app.MapGet("/api/instruments", () =>
+{
+    lock (instrumentsLock)
+    {
+        return Results.Ok(instruments.ToList());
+    }
+}).WithName("ListInstruments");
+
+app.MapPost("/api/instruments", (InstrumentCreate payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
+    {
+        return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
+    }
+
+    var name = payload.Name.Trim();
+    Instrument created;
+    lock (instrumentsLock)
+    {
+        var id = Interlocked.Increment(ref nextInstrumentId);
+        created = new Instrument(id, name);
+        instruments.Add(created);
+    }
+
+    return Results.Created($"/api/instruments/{created.Id}", created);
+}).WithName("CreateInstrument");
+
+app.MapPut("/api/instruments/{id:int}", (int id, InstrumentCreate payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
+    {
+        return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
+    }
+
+    lock (instrumentsLock)
+    {
+        var index = instruments.FindIndex(x => x.Id == id);
+        if (index < 0)
+        {
+            return Results.NotFound();
+        }
+
+        var updated = new Instrument(id, payload.Name.Trim());
+        instruments[index] = updated;
+        return Results.Ok(updated);
+    }
+}).WithName("UpdateInstrument");
+
+app.MapDelete("/api/instruments/{id:int}", (int id) =>
+{
+    lock (instrumentsLock)
+    {
+        var removed = instruments.RemoveAll(x => x.Id == id) > 0;
+        return removed ? Results.NoContent() : Results.NotFound();
+    }
+}).WithName("DeleteInstrument");
+
 
 
 
@@ -172,6 +241,8 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
 record PersonSubmission(string Name, string BirthDate, string Email);
+record Instrument(int Id, string Name);
+record InstrumentCreate(string Name);
 
 
 
