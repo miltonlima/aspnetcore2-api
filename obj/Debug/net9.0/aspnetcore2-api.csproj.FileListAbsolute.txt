@@ -35,3 +35,11 @@ C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.Swagger.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerGen.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerUI.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Npgsql.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.Configuration.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.Configuration.Abstractions.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.Configuration.FileExtensions.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.Configuration.Json.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.FileProviders.Abstractions.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.FileProviders.Physical.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.FileSystemGlobbing.dll
+C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.Primitives.dll
