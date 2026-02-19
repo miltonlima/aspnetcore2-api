@@ -1,10 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>aspnetcore2_api</RootNamespace>
+    <UserSecretsId>1c0f6226-2413-446d-9a60-43be9f5bf1ad</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
