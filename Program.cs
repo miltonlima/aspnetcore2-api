@@ -182,99 +182,7 @@ app.MapPost("/validarpessoa", ([Microsoft.AspNetCore.Mvc.FromBody] PersonSubmiss
 })
 .WithName("ValidarPessoa");
 
-// CRUD minimalista de instrumentos via API REST.
-app.MapGet("/api/instruments", async () =>
-{
-    try
-    {
-        var items = new List<Instrument>();
-        await using var cmd = dataSource.CreateCommand("select id, name from instruments order by id");
-        await using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            items.Add(new Instrument(reader.GetInt32(0), reader.GetString(1)));
-        }
-        return Results.Ok(items);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Erro GET /api/instruments: {ex.Message}\n{ex.StackTrace}");
-        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
-    }
-}).WithName("ListInstruments");
 
-app.MapPost("/api/instruments", async (InstrumentCreate payload) =>
-{
-    // Valida entrada, insere no Postgres/Supabase e devolve 201 Created com o recurso.
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
-    {
-        return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
-    }
-
-    try
-    {
-        var name = payload.Name.Trim();
-        await using var cmd = dataSource.CreateCommand("insert into instruments(name) values (@name) returning id, name");
-        cmd.Parameters.AddWithValue("@name", name);
-        await using var reader = await cmd.ExecuteReaderAsync();
-        if (!await reader.ReadAsync())
-        {
-            return Results.Problem("Falha ao inserir instrumento.");
-        }
-        var created = new Instrument(reader.GetInt32(0), reader.GetString(1));
-        return Results.Created($"/api/instruments/{created.Id}", created);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Erro POST /api/instruments: {ex.Message}\n{ex.StackTrace}");
-        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
-    }
-}).WithName("CreateInstrument");
-
-app.MapPut("/api/instruments/{id:int}", async (int id, InstrumentCreate payload) =>
-{
-    // Atualiza um instrumento existente no Postgres (valida nome, exige id existente e retorna 200 com o objeto atualizado).
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
-    {
-        return Results.BadRequest(new { mensagem = "Nome é obrigatório." });
-    }
-
-    try
-    {
-        await using var cmd = dataSource.CreateCommand("update instruments set name = @name where id = @id returning id, name");
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.Parameters.AddWithValue("@name", payload.Name.Trim());
-        await using var reader = await cmd.ExecuteReaderAsync();
-        if (!await reader.ReadAsync())
-        {
-            return Results.NotFound();
-        }
-
-        var updated = new Instrument(reader.GetInt32(0), reader.GetString(1));
-        return Results.Ok(updated);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Erro PUT /api/instruments/{id}: {ex.Message}\n{ex.StackTrace}");
-        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
-    }
-}).WithName("UpdateInstrument");
-
-app.MapDelete("/api/instruments/{id:int}", async (int id) =>
-{
-    try
-    {
-        await using var cmd = dataSource.CreateCommand("delete from instruments where id = @id");
-        cmd.Parameters.AddWithValue("@id", id);
-        var rows = await cmd.ExecuteNonQueryAsync();
-        return rows > 0 ? Results.NoContent() : Results.NotFound();
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Erro DELETE /api/instruments/{id}: {ex.Message}\n{ex.StackTrace}");
-        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
-    }
-}).WithName("DeleteInstrument");
 
 
 
@@ -288,8 +196,6 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
 record PersonSubmission(string Name, string BirthDate, string Email);
-record Instrument(int Id, string Name);
-record InstrumentCreate(string Name);
 
 
 
