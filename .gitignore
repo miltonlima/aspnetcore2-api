@@ -1,0 +1,7 @@
+# Keep local secrets/config out of git
+appsettings.Development.json
+appsettings.Local.json
+
+# Build outputs (if repo-level ignore is absent)
+bin/
+obj/
