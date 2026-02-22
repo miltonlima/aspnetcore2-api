@@ -49,8 +49,8 @@ app.UseCors("AllowFrontend");
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// Força redirecionamento para HTTPS quando disponível.
-app.UseHttpsRedirection();
+// Mantém HTTP em desenvolvimento para evitar redirecionamentos que quebram CORS nos testes locais.
+//app.UseHttpsRedirection();
 
 // Endpoint de teste simples que retorna uma string.
 app.MapGet("/texto", () => "Vim da API!").WithName("Texto");
@@ -276,7 +276,58 @@ app.MapDelete("/api/instruments/{id:int}", async (int id) =>
     }
 }).WithName("DeleteInstrument");
 
+// Autenticação básica: busca usuário no Supabase (tabela public.users) e compara senha.
+// OBS: Esta comparação é direta; se armazenar hash (recomendado), adapte para verificar o hash (ex.: BCrypt).
+app.MapPost("/login", async (LoginRequest? login) =>
+{
+    if (login is null || string.IsNullOrWhiteSpace(login.Email) || string.IsNullOrWhiteSpace(login.Password))
+    {
+        return Results.BadRequest(new { mensagem = "E-mail e senha são obrigatórios." });
+    }
 
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("select id, full_name, birth_date, sex, email, password_hash from public.users where email = @email limit 1");
+        cmd.Parameters.AddWithValue("@email", login.Email.Trim());
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Unauthorized();
+        }
+
+        var dbPassword = reader.GetString(reader.GetOrdinal("password_hash"));
+
+        // Comparação direta; ajuste para a função de hash utilizada na sua base.
+        var senhaValida = string.Equals(dbPassword, login.Password, StringComparison.Ordinal);
+
+        if (!senhaValida)
+        {
+            return Results.Unauthorized();
+        }
+
+        var user = new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            full_name = reader.GetString(reader.GetOrdinal("full_name")),
+            birth_date = reader.GetDateTime(reader.GetOrdinal("birth_date")),
+            sex = reader.GetString(reader.GetOrdinal("sex")),
+            email = reader.GetString(reader.GetOrdinal("email"))
+        };
+
+        return Results.Ok(new { mensagem = "Login válido.", usuario = user });
+    }
+    catch (PostgresException ex)
+    {
+        Console.WriteLine($"Erro Postgres /login: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Erro no banco", statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro /login: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("Login");
 
 
 // Inicia o servidor web e bloqueia o thread principal.
@@ -288,6 +339,7 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
 record PersonSubmission(string Name, string BirthDate, string Email);
+record LoginRequest(string Email, string Password);
 record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
 
