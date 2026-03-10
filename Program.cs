@@ -296,7 +296,13 @@ app.MapPost("/login", async (LoginRequest? login) =>
             return Results.Unauthorized();
         }
 
-        var dbPassword = reader.GetString(reader.GetOrdinal("password_hash"));
+        var passwordHashOrdinal = reader.GetOrdinal("password_hash");
+        if (reader.IsDBNull(passwordHashOrdinal))
+        {
+            return Results.Unauthorized();
+        }
+
+        var dbPassword = reader.GetString(passwordHashOrdinal);
 
         // Comparação direta; ajuste para a função de hash utilizada na sua base.
         var senhaValida = string.Equals(dbPassword, login.Password, StringComparison.Ordinal);
