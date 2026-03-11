@@ -335,6 +335,81 @@ app.MapPost("/login", async (LoginRequest? login) =>
     }
 }).WithName("Login");
 
+// Endpoint de cadastro: recebe dados do formulário e cria novo usuário no Supabase.
+app.MapPost("/register", async (RegisterRequest? register) =>
+{
+    if (register is null || string.IsNullOrWhiteSpace(register.FullName) || 
+        string.IsNullOrWhiteSpace(register.BirthDate) || 
+        string.IsNullOrWhiteSpace(register.Sex) ||
+        string.IsNullOrWhiteSpace(register.Email) || 
+        string.IsNullOrWhiteSpace(register.Password))
+    {
+        return Results.BadRequest(new { mensagem = "Todos os campos são obrigatórios." });
+    }
+
+    if (!register.Password.Equals(register.ConfirmPassword, StringComparison.Ordinal))
+    {
+        return Results.BadRequest(new { mensagem = "As senhas não conferem." });
+    }
+
+    // Valida formato de e-mail simples
+    if (!register.Email.Contains("@"))
+    {
+        return Results.BadRequest(new { mensagem = "E-mail inválido." });
+    }
+
+    try
+    {
+        // Verifica se e-mail já existe
+        await using var checkCmd = dataSource.CreateCommand("select id from public.users where email = @email limit 1");
+        checkCmd.Parameters.AddWithValue("@email", register.Email.Trim());
+        await using var checkReader = await checkCmd.ExecuteReaderAsync();
+        if (await checkReader.ReadAsync())
+        {
+            return Results.BadRequest(new { mensagem = "E-mail já cadastrado." });
+        }
+
+        // Insere novo usuário
+        await using var cmd = dataSource.CreateCommand(
+            "insert into public.users (full_name, birth_date, sex, email, password_hash) " +
+            "values (@full_name, @birth_date, @sex, @email, @password_hash) " +
+            "returning id, full_name, birth_date, sex, email");
+        
+        cmd.Parameters.AddWithValue("@full_name", register.FullName.Trim());
+        cmd.Parameters.AddWithValue("@birth_date", DateTime.Parse(register.BirthDate));
+        cmd.Parameters.AddWithValue("@sex", register.Sex.Trim());
+        cmd.Parameters.AddWithValue("@email", register.Email.Trim());
+        cmd.Parameters.AddWithValue("@password_hash", register.Password);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao criar usuário.");
+        }
+
+        var user = new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            full_name = reader.GetString(reader.GetOrdinal("full_name")),
+            birth_date = reader.GetDateTime(reader.GetOrdinal("birth_date")),
+            sex = reader.GetString(reader.GetOrdinal("sex")),
+            email = reader.GetString(reader.GetOrdinal("email"))
+        };
+
+        return Results.Created($"/register/{user.id}", new { mensagem = "Cadastro realizado com sucesso.", usuario = user });
+    }
+    catch (PostgresException ex)
+    {
+        Console.WriteLine($"Erro Postgres /register: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Erro no banco", statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro /register: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("Register");
+
 
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
@@ -346,6 +421,7 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 }
 record PersonSubmission(string Name, string BirthDate, string Email);
 record LoginRequest(string Email, string Password);
+record RegisterRequest(string FullName, string BirthDate, string Sex, string Email, string Password, string ConfirmPassword);
 record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
 

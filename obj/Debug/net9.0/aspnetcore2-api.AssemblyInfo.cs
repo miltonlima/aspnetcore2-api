@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("aspnetcore2-api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c113c6348fddd9720fb02745569f8c6c70756815")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0dc61cf5f14fe0290993f7e6c934b1be9b91c44d")]
 [assembly: System.Reflection.AssemblyProductAttribute("aspnetcore2-api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("aspnetcore2-api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
