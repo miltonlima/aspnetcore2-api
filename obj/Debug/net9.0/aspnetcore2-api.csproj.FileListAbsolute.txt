@@ -43,3 +43,4 @@ C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.FileProviders.Abst
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.FileProviders.Physical.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.FileSystemGlobbing.dll
 C:\temp\aspnetcore2-api\bin\Debug\net9.0\Microsoft.Extensions.Primitives.dll
+C:\temp\aspnetcore2-api\obj\Debug\net9.0\swae.build.ex.cache

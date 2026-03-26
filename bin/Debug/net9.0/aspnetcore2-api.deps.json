@@ -28,7 +28,6 @@
           }
         }
       },
-      "Microsoft.Extensions.ApiDescription.Server/9.0.0": {},
       "Microsoft.Extensions.Configuration/9.0.10": {
         "dependencies": {
           "Microsoft.Extensions.Configuration.Abstractions": "9.0.10",
@@ -81,7 +80,6 @@
           }
         }
       },
-      "Microsoft.Extensions.DependencyInjection.Abstractions/8.0.0": {},
       "Microsoft.Extensions.FileProviders.Abstractions/9.0.10": {
         "dependencies": {
           "Microsoft.Extensions.Primitives": "9.0.10"
@@ -114,11 +112,6 @@
           }
         }
       },
-      "Microsoft.Extensions.Logging.Abstractions/8.0.0": {
-        "dependencies": {
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "8.0.0"
-        }
-      },
       "Microsoft.Extensions.Primitives/9.0.10": {
         "runtime": {
           "lib/net9.0/Microsoft.Extensions.Primitives.dll": {
@@ -128,9 +121,6 @@
         }
       },
       "Microsoft.OpenApi/2.3.0": {
-        "dependencies": {
-          "System.Text.Json": "8.0.5"
-        },
         "runtime": {
           "lib/net8.0/Microsoft.OpenApi.dll": {
             "assemblyVersion": "2.3.0.0",
@@ -139,9 +129,6 @@
         }
       },
       "Npgsql/8.0.3": {
-        "dependencies": {
-          "Microsoft.Extensions.Logging.Abstractions": "8.0.0"
-        },
         "runtime": {
           "lib/net8.0/Npgsql.dll": {
             "assemblyVersion": "8.0.3.0",
@@ -151,7 +138,6 @@
       },
       "Swashbuckle.AspNetCore/10.0.1": {
         "dependencies": {
-          "Microsoft.Extensions.ApiDescription.Server": "9.0.0",
           "Swashbuckle.AspNetCore.Swagger": "10.0.1",
           "Swashbuckle.AspNetCore.SwaggerGen": "10.0.1",
           "Swashbuckle.AspNetCore.SwaggerUI": "10.0.1"
@@ -186,8 +172,7 @@
             "fileVersion": "10.0.1.1964"
           }
         }
-      },
-      "System.Text.Json/8.0.5": {}
+      }
     }
   },
   "libraries": {
@@ -202,13 +187,6 @@
       "sha512": "sha512-yAv5EDEi0Nkk75Vhxh6ppuXd/QIO8hzjGpAt/fGInMZWIX/mVwZ1IM50YFIWeLCVM8KDj0oFPQdcLeQ+9hEJsw==",
       "path": "microsoft.aspnetcore.openapi/9.0.10",
       "hashPath": "microsoft.aspnetcore.openapi.9.0.10.nupkg.sha512"
-    },
-    "Microsoft.Extensions.ApiDescription.Server/9.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-1Kzzf7pRey40VaUkHN9/uWxrKVkLu2AQjt+GVeeKLLpiEHAJ1xZRsLSh4ZZYEnyS7Kt2OBOPmsXNdU+wbcOl5w==",
-      "path": "microsoft.extensions.apidescription.server/9.0.0",
-      "hashPath": "microsoft.extensions.apidescription.server.9.0.0.nupkg.sha512"
     },
     "Microsoft.Extensions.Configuration/9.0.10": {
       "type": "package",
@@ -238,13 +216,6 @@
       "path": "microsoft.extensions.configuration.json/9.0.10",
       "hashPath": "microsoft.extensions.configuration.json.9.0.10.nupkg.sha512"
     },
-    "Microsoft.Extensions.DependencyInjection.Abstractions/8.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-cjWrLkJXK0rs4zofsK4bSdg+jhDLTaxrkXu4gS6Y7MAlCvRyNNgwY/lJi5RDlQOnSZweHqoyvgvbdvQsRIW+hg==",
-      "path": "microsoft.extensions.dependencyinjection.abstractions/8.0.0",
-      "hashPath": "microsoft.extensions.dependencyinjection.abstractions.8.0.0.nupkg.sha512"
-    },
     "Microsoft.Extensions.FileProviders.Abstractions/9.0.10": {
       "type": "package",
       "serviceable": true,
@@ -265,13 +236,6 @@
       "sha512": "sha512-KdZAM2YMYBipVp/4tSEWPLnrocd17SL4iaXdgXjR5/nheBXbfR5QfPWYoTyh6C6IW3uKR7TRMwQr2qCvtaCTiA==",
       "path": "microsoft.extensions.filesystemglobbing/9.0.10",
       "hashPath": "microsoft.extensions.filesystemglobbing.9.0.10.nupkg.sha512"
-    },
-    "Microsoft.Extensions.Logging.Abstractions/8.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-arDBqTgFCyS0EvRV7O3MZturChstm50OJ0y9bDJvAcmEPJm0FFpFyjU/JLYyStNGGey081DvnQYlncNX5SJJGA==",
-      "path": "microsoft.extensions.logging.abstractions/8.0.0",
-      "hashPath": "microsoft.extensions.logging.abstractions.8.0.0.nupkg.sha512"
     },
     "Microsoft.Extensions.Primitives/9.0.10": {
       "type": "package",
@@ -321,13 +285,6 @@
       "sha512": "sha512-a2eLI/fCxJ3WH+H1hr7Q2T82ZBk20FfqYBEZ9hOr3f+426ZUfGU2LxYWzOJrf5/4y6EKShmWpjJG01h3Rc+l6Q==",
       "path": "swashbuckle.aspnetcore.swaggerui/10.0.1",
       "hashPath": "swashbuckle.aspnetcore.swaggerui.10.0.1.nupkg.sha512"
-    },
-    "System.Text.Json/8.0.5": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg==",
-      "path": "system.text.json/8.0.5",
-      "hashPath": "system.text.json.8.0.5.nupkg.sha512"
     }
   }
 }
