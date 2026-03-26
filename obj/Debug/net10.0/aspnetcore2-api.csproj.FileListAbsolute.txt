@@ -36,3 +36,4 @@ c:\temp\aspnetcore2-api\obj\Debug\net10.0\refint\aspnetcore2-api.dll
 c:\temp\aspnetcore2-api\obj\Debug\net10.0\aspnetcore2-api.pdb
 c:\temp\aspnetcore2-api\obj\Debug\net10.0\aspnetcore2-api.genruntimeconfig.cache
 c:\temp\aspnetcore2-api\obj\Debug\net10.0\ref\aspnetcore2-api.dll
+C:\temp\aspnetcore2-api\obj\Debug\net10.0\staticwebassets.upToDateCheck.txt
