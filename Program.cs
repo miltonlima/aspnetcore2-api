@@ -302,6 +302,119 @@ app.MapDelete("/api/instruments/{id:int}", async (int id) =>
     }
 }).WithName("DeleteInstrument");
 
+// CRUD de modalidades na tabela public.modalidade.
+app.MapGet("/api/modalidades", async () =>
+{
+    try
+    {
+        var items = new List<Modalidade>();
+        await using var cmd = dataSource.CreateCommand("select id, course_name, created_at from public.modalidade order by id");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new Modalidade(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetDateTime(2)
+            ));
+        }
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/modalidades: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListModalidades");
+
+app.MapPost("/api/modalidades", async (ModalidadeCreate payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.CourseName))
+    {
+        return Results.BadRequest(new { mensagem = "Nome da modalidade é obrigatório." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            insert into public.modalidade (course_name)
+            values (@course_name)
+            returning id, course_name, created_at");
+        cmd.Parameters.AddWithValue("@course_name", payload.CourseName.Trim());
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao inserir modalidade.");
+        }
+
+        var created = new Modalidade(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetDateTime(2)
+        );
+        return Results.Created($"/api/modalidades/{created.Id}", created);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/modalidades: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreateModalidade");
+
+app.MapPut("/api/modalidades/{id:long}", async (long id, ModalidadeCreate payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.CourseName))
+    {
+        return Results.BadRequest(new { mensagem = "Nome da modalidade é obrigatório." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            update public.modalidade
+            set course_name = @course_name
+            where id = @id
+            returning id, course_name, created_at");
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@course_name", payload.CourseName.Trim());
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound(new { mensagem = "Modalidade não encontrada." });
+        }
+
+        var updated = new Modalidade(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetDateTime(2)
+        );
+        return Results.Ok(updated);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro PUT /api/modalidades/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("UpdateModalidade");
+
+app.MapDelete("/api/modalidades/{id:long}", async (long id) =>
+{
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from public.modalidade where id = @id");
+        cmd.Parameters.AddWithValue("@id", id);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound(new { mensagem = "Modalidade não encontrada." });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/modalidades/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("DeleteModalidade");
+
 // Autenticação básica: busca usuário no Supabase (tabela public.users) e compara senha.
 // OBS: Esta comparação é direta; se armazenar hash (recomendado), adapte para verificar o hash (ex.: BCrypt).
 app.MapPost("/login", async (LoginRequest? login) =>
@@ -860,6 +973,8 @@ record LoginRequest(string Email, string Password);
 record RegisterRequest(string FullName, string BirthDate, string Sex, string Email, string Password, string ConfirmPassword);
 record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
+record Modalidade(long Id, string CourseName, DateTime CreatedAt);
+record ModalidadeCreate(string CourseName);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
