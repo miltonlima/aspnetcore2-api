@@ -62,6 +62,8 @@ catch (Exception ex)
 
 var hasUsersTable = userColumns.Count > 0;
 var hasUsersIsActive = userColumns.Contains("is_active");
+var hasUsersActive = userColumns.Contains("active");
+var hasUsersStatus = userColumns.Contains("status");
 var hasUsersInactiveAt = userColumns.Contains("inactive_at");
 var hasUsersUpdatedAt = userColumns.Contains("updated_at");
 
@@ -449,9 +451,13 @@ app.MapGet("/api/alunos", async (bool includeInactive = false) =>
     {
         var statusSql = hasUsersIsActive
             ? "coalesce(is_active, true)"
-            : hasUsersInactiveAt
-                ? "(inactive_at is null)"
-                : "true";
+            : hasUsersActive
+                ? "coalesce(active, true)"
+                : hasUsersStatus
+                    ? "(upper(coalesce(status, 'A')) in ('A', 'ATIVO', '1', 'TRUE'))"
+                    : hasUsersInactiveAt
+                        ? "(inactive_at is null)"
+                        : "true";
 
         var whereSql = string.Empty;
         if (!includeInactive)
@@ -459,6 +465,14 @@ app.MapGet("/api/alunos", async (bool includeInactive = false) =>
             if (hasUsersIsActive)
             {
                 whereSql = " where coalesce(is_active, true) = true";
+            }
+            else if (hasUsersActive)
+            {
+                whereSql = " where coalesce(active, true) = true";
+            }
+            else if (hasUsersStatus)
+            {
+                whereSql = " where upper(coalesce(status, 'A')) in ('A', 'ATIVO', '1', 'TRUE')";
             }
             else if (hasUsersInactiveAt)
             {
@@ -517,9 +531,13 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
     {
         var statusSql = hasUsersIsActive
             ? "coalesce(is_active, true)"
-            : hasUsersInactiveAt
-                ? "(inactive_at is null)"
-                : "true";
+            : hasUsersActive
+                ? "coalesce(active, true)"
+                : hasUsersStatus
+                    ? "(upper(coalesce(status, 'A')) in ('A', 'ATIVO', '1', 'TRUE'))"
+                    : hasUsersInactiveAt
+                        ? "(inactive_at is null)"
+                        : "true";
         var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
 
         var sql = $@"
@@ -618,9 +636,13 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
 
         var statusSql = hasUsersIsActive
             ? "coalesce(is_active, true)"
-            : hasUsersInactiveAt
-                ? "(inactive_at is null)"
-                : "true";
+            : hasUsersActive
+                ? "coalesce(active, true)"
+                : hasUsersStatus
+                    ? "(upper(coalesce(status, 'A')) in ('A', 'ATIVO', '1', 'TRUE'))"
+                    : hasUsersInactiveAt
+                        ? "(inactive_at is null)"
+                        : "true";
         var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
         var updatedAtSetSql = hasUsersUpdatedAt ? ", updated_at = now()" : string.Empty;
 
@@ -692,6 +714,14 @@ app.MapDelete("/api/alunos/{id:long}/inativar", async (long id) =>
     {
         setClauses.Add("is_active = false");
     }
+    if (hasUsersActive)
+    {
+        setClauses.Add("active = false");
+    }
+    if (hasUsersStatus)
+    {
+        setClauses.Add("status = 'I'");
+    }
     if (hasUsersInactiveAt)
     {
         setClauses.Add("inactive_at = now()");
@@ -701,11 +731,12 @@ app.MapDelete("/api/alunos/{id:long}/inativar", async (long id) =>
         setClauses.Add("updated_at = now()");
     }
 
-    if (setClauses.Count == 0)
+    var hasInactivationField = hasUsersIsActive || hasUsersActive || hasUsersStatus || hasUsersInactiveAt;
+    if (!hasInactivationField)
     {
         return Results.BadRequest(new
         {
-            mensagem = "Schema de users não possui colunas para inativação (is_active ou inactive_at)."
+            mensagem = "Schema de users não possui colunas para inativação (is_active, active, status ou inactive_at)."
         });
     }
 
