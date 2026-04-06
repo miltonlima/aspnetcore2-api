@@ -41,6 +41,30 @@ var app = builder.Build();
 
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 
+// Descobre colunas disponíveis em public.users para manter compatibilidade de schema.
+var userColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+try
+{
+    await using var userColumnsCmd = dataSource.CreateCommand(@"
+        select column_name
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'users'");
+    await using var userColumnsReader = await userColumnsCmd.ExecuteReaderAsync();
+    while (await userColumnsReader.ReadAsync())
+    {
+        userColumns.Add(userColumnsReader.GetString(0));
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Falha ao ler schema de public.users: {ex.Message}");
+}
+
+var hasUsersTable = userColumns.Count > 0;
+var hasUsersIsActive = userColumns.Contains("is_active");
+var hasUsersInactiveAt = userColumns.Contains("inactive_at");
+var hasUsersUpdatedAt = userColumns.Contains("updated_at");
+
 // Aplica CORS antes de demais middlewares para garantir cabeçalhos em erros.
 app.UseCors("AllowFrontend");
 
@@ -410,6 +434,307 @@ app.MapPost("/register", async (RegisterRequest? register) =>
     }
 }).WithName("Register");
 
+// Lista alunos com opção de incluir inativos.
+app.MapGet("/api/alunos", async (bool includeInactive = false) =>
+{
+    if (!hasUsersTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.users não encontrada no banco.",
+            title: "Regra de negócio indisponível",
+            statusCode: 500);
+    }
+
+    try
+    {
+        var statusSql = hasUsersIsActive
+            ? "coalesce(is_active, true)"
+            : hasUsersInactiveAt
+                ? "(inactive_at is null)"
+                : "true";
+
+        var whereSql = string.Empty;
+        if (!includeInactive)
+        {
+            if (hasUsersIsActive)
+            {
+                whereSql = " where coalesce(is_active, true) = true";
+            }
+            else if (hasUsersInactiveAt)
+            {
+                whereSql = " where inactive_at is null";
+            }
+        }
+
+        var sql = $@"
+            select
+                id,
+                full_name,
+                birth_date,
+                sex,
+                email,
+                {statusSql} as is_active
+            from public.users
+            {whereSql}
+            order by full_name";
+
+        var items = new List<StudentListItem>();
+        await using var cmd = dataSource.CreateCommand(sql);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new StudentListItem(
+                reader.GetInt64(reader.GetOrdinal("id")),
+                reader.GetString(reader.GetOrdinal("full_name")),
+                reader.GetDateTime(reader.GetOrdinal("birth_date")),
+                reader.GetString(reader.GetOrdinal("sex")),
+                reader.GetString(reader.GetOrdinal("email")),
+                reader.GetBoolean(reader.GetOrdinal("is_active"))
+            ));
+        }
+
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/alunos: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListAlunos");
+
+// Retorna o cadastro detalhado de um aluno.
+app.MapGet("/api/alunos/{id:long}", async (long id) =>
+{
+    if (!hasUsersTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.users não encontrada no banco.",
+            title: "Regra de negócio indisponível",
+            statusCode: 500);
+    }
+
+    try
+    {
+        var statusSql = hasUsersIsActive
+            ? "coalesce(is_active, true)"
+            : hasUsersInactiveAt
+                ? "(inactive_at is null)"
+                : "true";
+        var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
+
+        var sql = $@"
+            select
+                id,
+                full_name,
+                birth_date,
+                sex,
+                email,
+                {statusSql} as is_active,
+                {inactiveAtSql} as inactive_at
+            from public.users
+            where id = @id
+            limit 1";
+
+        await using var cmd = dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("@id", id);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound(new { mensagem = "Aluno não encontrado." });
+        }
+
+        var inactiveAtOrdinal = reader.GetOrdinal("inactive_at");
+
+        var aluno = new StudentDetail(
+            reader.GetInt64(reader.GetOrdinal("id")),
+            reader.GetString(reader.GetOrdinal("full_name")),
+            reader.GetDateTime(reader.GetOrdinal("birth_date")),
+            reader.GetString(reader.GetOrdinal("sex")),
+            reader.GetString(reader.GetOrdinal("email")),
+            reader.GetBoolean(reader.GetOrdinal("is_active")),
+            reader.IsDBNull(inactiveAtOrdinal) ? null : reader.GetDateTime(inactiveAtOrdinal)
+        );
+
+        return Results.Ok(aluno);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/alunos/{{id}}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("GetAlunoById");
+
+// Atualiza dados cadastrais de um aluno.
+app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payload) =>
+{
+    if (!hasUsersTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.users não encontrada no banco.",
+            title: "Regra de negócio indisponível",
+            statusCode: 500);
+    }
+
+    if (payload is null ||
+        string.IsNullOrWhiteSpace(payload.FullName) ||
+        string.IsNullOrWhiteSpace(payload.BirthDate) ||
+        string.IsNullOrWhiteSpace(payload.Sex) ||
+        string.IsNullOrWhiteSpace(payload.Email))
+    {
+        return Results.BadRequest(new { mensagem = "Todos os campos são obrigatórios." });
+    }
+
+    if (!payload.Email.Contains("@"))
+    {
+        return Results.BadRequest(new { mensagem = "E-mail inválido." });
+    }
+
+    if (!DateTime.TryParse(payload.BirthDate, out var parsedBirthDate))
+    {
+        if (!DateTime.TryParseExact(payload.BirthDate,
+                                    new[] { "yyyy-MM-dd", "dd/MM/yyyy", "dd-MM-yyyy" },
+                                    CultureInfo.InvariantCulture,
+                                    DateTimeStyles.None,
+                                    out parsedBirthDate))
+        {
+            return Results.BadRequest(new { mensagem = "Formato de data inválido. Use yyyy-MM-dd ou dd/MM/yyyy." });
+        }
+    }
+
+    try
+    {
+        await using var checkEmailCmd = dataSource.CreateCommand(@"
+            select 1
+            from public.users
+            where lower(email) = lower(@email) and id <> @id
+            limit 1");
+        checkEmailCmd.Parameters.AddWithValue("@email", payload.Email.Trim());
+        checkEmailCmd.Parameters.AddWithValue("@id", id);
+        var duplicateEmail = await checkEmailCmd.ExecuteScalarAsync();
+        if (duplicateEmail is not null)
+        {
+            return Results.BadRequest(new { mensagem = "Já existe um aluno com este e-mail." });
+        }
+
+        var statusSql = hasUsersIsActive
+            ? "coalesce(is_active, true)"
+            : hasUsersInactiveAt
+                ? "(inactive_at is null)"
+                : "true";
+        var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
+        var updatedAtSetSql = hasUsersUpdatedAt ? ", updated_at = now()" : string.Empty;
+
+        var sql = $@"
+            update public.users
+            set
+                full_name = @full_name,
+                birth_date = @birth_date,
+                sex = @sex,
+                email = @email
+                {updatedAtSetSql}
+            where id = @id
+            returning
+                id,
+                full_name,
+                birth_date,
+                sex,
+                email,
+                {statusSql} as is_active,
+                {inactiveAtSql} as inactive_at";
+
+        await using var cmd = dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@full_name", payload.FullName.Trim());
+        cmd.Parameters.AddWithValue("@birth_date", parsedBirthDate.Date);
+        cmd.Parameters.AddWithValue("@sex", payload.Sex.Trim());
+        cmd.Parameters.AddWithValue("@email", payload.Email.Trim());
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound(new { mensagem = "Aluno não encontrado." });
+        }
+
+        var inactiveAtOrdinal = reader.GetOrdinal("inactive_at");
+
+        var aluno = new StudentDetail(
+            reader.GetInt64(reader.GetOrdinal("id")),
+            reader.GetString(reader.GetOrdinal("full_name")),
+            reader.GetDateTime(reader.GetOrdinal("birth_date")),
+            reader.GetString(reader.GetOrdinal("sex")),
+            reader.GetString(reader.GetOrdinal("email")),
+            reader.GetBoolean(reader.GetOrdinal("is_active")),
+            reader.IsDBNull(inactiveAtOrdinal) ? null : reader.GetDateTime(inactiveAtOrdinal)
+        );
+
+        return Results.Ok(new { mensagem = "Aluno atualizado com sucesso.", aluno });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro PUT /api/alunos/{{id}}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("UpdateAluno");
+
+// Inativa aluno (soft delete) usando colunas de status quando disponíveis.
+app.MapDelete("/api/alunos/{id:long}/inativar", async (long id) =>
+{
+    if (!hasUsersTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.users não encontrada no banco.",
+            title: "Regra de negócio indisponível",
+            statusCode: 500);
+    }
+
+    var setClauses = new List<string>();
+    if (hasUsersIsActive)
+    {
+        setClauses.Add("is_active = false");
+    }
+    if (hasUsersInactiveAt)
+    {
+        setClauses.Add("inactive_at = now()");
+    }
+    if (hasUsersUpdatedAt)
+    {
+        setClauses.Add("updated_at = now()");
+    }
+
+    if (setClauses.Count == 0)
+    {
+        return Results.BadRequest(new
+        {
+            mensagem = "Schema de users não possui colunas para inativação (is_active ou inactive_at)."
+        });
+    }
+
+    try
+    {
+        var sql = $@"
+            update public.users
+            set {string.Join(", ", setClauses)}
+            where id = @id
+            returning id";
+
+        await using var cmd = dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("@id", id);
+
+        var result = await cmd.ExecuteScalarAsync();
+        if (result is null)
+        {
+            return Results.NotFound(new { mensagem = "Aluno não encontrado." });
+        }
+
+        return Results.Ok(new { mensagem = "Aluno inativado com sucesso.", id });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/alunos/{{id}}/inativar: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("InactivateAluno");
+
 
 // Inicia o servidor web e bloqueia o thread principal.
 app.Run();
@@ -424,6 +749,9 @@ record LoginRequest(string Email, string Password);
 record RegisterRequest(string FullName, string BirthDate, string Sex, string Email, string Password, string ConfirmPassword);
 record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
+record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
+record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
+record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
 
 
 
