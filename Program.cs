@@ -396,9 +396,17 @@ app.MapPost("/register", async (RegisterRequest? register) =>
         }
 
         // Insere novo usuário
+        var registerColumns = "full_name, birth_date, sex, email, password_hash";
+        var registerValues = "@full_name, @birth_date, @sex, @email, @password_hash";
+        if (hasUsersActive)
+        {
+            registerColumns += ", active";
+            registerValues += ", @active";
+        }
+
         await using var cmd = dataSource.CreateCommand(
-            "insert into public.users (full_name, birth_date, sex, email, password_hash) " +
-            "values (@full_name, @birth_date, @sex, @email, @password_hash) " +
+            $"insert into public.users ({registerColumns}) " +
+            $"values ({registerValues}) " +
             "returning id, full_name, birth_date, sex, email");
         
         cmd.Parameters.AddWithValue("@full_name", register.FullName.Trim());
@@ -406,6 +414,10 @@ app.MapPost("/register", async (RegisterRequest? register) =>
         cmd.Parameters.AddWithValue("@sex", register.Sex.Trim());
         cmd.Parameters.AddWithValue("@email", register.Email.Trim());
         cmd.Parameters.AddWithValue("@password_hash", register.Password);
+        if (hasUsersActive)
+        {
+            cmd.Parameters.AddWithValue("@active", true);
+        }
 
         await using var reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
@@ -765,6 +777,74 @@ app.MapDelete("/api/alunos/{id:long}/inativar", async (long id) =>
         return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
     }
 }).WithName("InactivateAluno");
+
+// Reativa aluno (desfaz soft delete) usando colunas de status quando disponíveis.
+app.MapPost("/api/alunos/{id:long}/reativar", async (long id) =>
+{
+    if (!hasUsersTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.users não encontrada no banco.",
+            title: "Regra de negócio indisponível",
+            statusCode: 500);
+    }
+
+    var setClauses = new List<string>();
+    if (hasUsersIsActive)
+    {
+        setClauses.Add("is_active = true");
+    }
+    if (hasUsersActive)
+    {
+        setClauses.Add("active = true");
+    }
+    if (hasUsersStatus)
+    {
+        setClauses.Add("status = 'A'");
+    }
+    if (hasUsersInactiveAt)
+    {
+        setClauses.Add("inactive_at = null");
+    }
+    if (hasUsersUpdatedAt)
+    {
+        setClauses.Add("updated_at = now()");
+    }
+
+    var hasInactivationField = hasUsersIsActive || hasUsersActive || hasUsersStatus || hasUsersInactiveAt;
+    if (!hasInactivationField)
+    {
+        return Results.BadRequest(new
+        {
+            mensagem = "Schema de users não possui colunas para reativação (is_active, active, status ou inactive_at)."
+        });
+    }
+
+    try
+    {
+        var sql = $@"
+            update public.users
+            set {string.Join(", ", setClauses)}
+            where id = @id
+            returning id";
+
+        await using var cmd = dataSource.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("@id", id);
+
+        var result = await cmd.ExecuteScalarAsync();
+        if (result is null)
+        {
+            return Results.NotFound(new { mensagem = "Aluno não encontrado." });
+        }
+
+        return Results.Ok(new { mensagem = "Aluno reativado com sucesso.", id });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/alunos/{{id}}/reativar: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ReactivateAluno");
 
 
 // Inicia o servidor web e bloqueia o thread principal.
