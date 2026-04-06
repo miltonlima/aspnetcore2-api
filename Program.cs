@@ -415,6 +415,181 @@ app.MapDelete("/api/modalidades/{id:long}", async (long id) =>
     }
 }).WithName("DeleteModalidade");
 
+// CRUD de turmas na tabela public.turma, relacionando com public.modalidade.
+app.MapGet("/api/turmas", async () =>
+{
+    try
+    {
+        var items = new List<Turma>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                t.id,
+                t.nome_turma,
+                t.modalidade_id,
+                m.course_name,
+                t.data_inicio,
+                t.data_fim,
+                coalesce(t.active, true) as active
+            from public.turma t
+            inner join public.modalidade m on m.id = t.modalidade_id
+            order by t.id");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new Turma(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+                reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+                reader.GetBoolean(6)
+            ));
+        }
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/turmas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListTurmas");
+
+app.MapPost("/api/turmas", async (TurmaCreate payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.NomeTurma) || payload.ModalidadeId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Nome da turma e modalidade são obrigatórios." });
+    }
+
+    if (payload.DataInicio.HasValue && payload.DataFim.HasValue && payload.DataFim < payload.DataInicio)
+    {
+        return Results.BadRequest(new { mensagem = "Data fim não pode ser menor que data início." });
+    }
+
+    try
+    {
+        await using var modalidadeCmd = dataSource.CreateCommand("select course_name from public.modalidade where id = @id");
+        modalidadeCmd.Parameters.AddWithValue("@id", payload.ModalidadeId);
+        var modalidadeNomeObj = await modalidadeCmd.ExecuteScalarAsync();
+        if (modalidadeNomeObj is null)
+        {
+            return Results.BadRequest(new { mensagem = "Modalidade informada não existe." });
+        }
+
+        await using var cmd = dataSource.CreateCommand(@"
+            insert into public.turma (nome_turma, modalidade_id, data_inicio, data_fim, active)
+            values (@nome_turma, @modalidade_id, @data_inicio, @data_fim, @active)
+            returning id, nome_turma, modalidade_id, data_inicio, data_fim, coalesce(active, true)");
+        cmd.Parameters.AddWithValue("@nome_turma", payload.NomeTurma.Trim());
+        cmd.Parameters.AddWithValue("@modalidade_id", payload.ModalidadeId);
+        cmd.Parameters.AddWithValue("@data_inicio", payload.DataInicio.HasValue ? payload.DataInicio.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@data_fim", payload.DataFim.HasValue ? payload.DataFim.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao inserir turma.");
+        }
+
+        var created = new Turma(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetInt64(2),
+            modalidadeNomeObj.ToString() ?? string.Empty,
+            reader.IsDBNull(3) ? null : reader.GetDateTime(3),
+            reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+            reader.GetBoolean(5)
+        );
+        return Results.Created($"/api/turmas/{created.Id}", created);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/turmas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreateTurma");
+
+app.MapPut("/api/turmas/{id:long}", async (long id, TurmaCreate payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.NomeTurma) || payload.ModalidadeId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Nome da turma e modalidade são obrigatórios." });
+    }
+
+    if (payload.DataInicio.HasValue && payload.DataFim.HasValue && payload.DataFim < payload.DataInicio)
+    {
+        return Results.BadRequest(new { mensagem = "Data fim não pode ser menor que data início." });
+    }
+
+    try
+    {
+        await using var modalidadeCmd = dataSource.CreateCommand("select course_name from public.modalidade where id = @id");
+        modalidadeCmd.Parameters.AddWithValue("@id", payload.ModalidadeId);
+        var modalidadeNomeObj = await modalidadeCmd.ExecuteScalarAsync();
+        if (modalidadeNomeObj is null)
+        {
+            return Results.BadRequest(new { mensagem = "Modalidade informada não existe." });
+        }
+
+        await using var cmd = dataSource.CreateCommand(@"
+            update public.turma
+            set
+                nome_turma = @nome_turma,
+                modalidade_id = @modalidade_id,
+                data_inicio = @data_inicio,
+                data_fim = @data_fim,
+                active = @active
+            where id = @id
+            returning id, nome_turma, modalidade_id, data_inicio, data_fim, coalesce(active, true)");
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@nome_turma", payload.NomeTurma.Trim());
+        cmd.Parameters.AddWithValue("@modalidade_id", payload.ModalidadeId);
+        cmd.Parameters.AddWithValue("@data_inicio", payload.DataInicio.HasValue ? payload.DataInicio.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@data_fim", payload.DataFim.HasValue ? payload.DataFim.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound(new { mensagem = "Turma não encontrada." });
+        }
+
+        var updated = new Turma(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetInt64(2),
+            modalidadeNomeObj.ToString() ?? string.Empty,
+            reader.IsDBNull(3) ? null : reader.GetDateTime(3),
+            reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+            reader.GetBoolean(5)
+        );
+        return Results.Ok(updated);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro PUT /api/turmas/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("UpdateTurma");
+
+app.MapDelete("/api/turmas/{id:long}", async (long id) =>
+{
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from public.turma where id = @id");
+        cmd.Parameters.AddWithValue("@id", id);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound(new { mensagem = "Turma não encontrada." });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/turmas/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("DeleteTurma");
+
 // Autenticação básica: busca usuário no Supabase (tabela public.users) e compara senha.
 // OBS: Esta comparação é direta; se armazenar hash (recomendado), adapte para verificar o hash (ex.: BCrypt).
 app.MapPost("/login", async (LoginRequest? login) =>
@@ -975,6 +1150,8 @@ record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
 record Modalidade(long Id, string CourseName, DateTime CreatedAt);
 record ModalidadeCreate(string CourseName);
+record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active);
+record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
