@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using Npgsql;
 
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
@@ -15,6 +16,37 @@ if (string.IsNullOrWhiteSpace(supabaseConnString))
 
 builder.Services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(supabaseConnString));
 
+static bool IsPrivateNetworkHost(string host)
+{
+    if (string.IsNullOrWhiteSpace(host))
+    {
+        return false;
+    }
+
+    if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    if (!IPAddress.TryParse(host, out var ip))
+    {
+        return false;
+    }
+
+    if (IPAddress.IsLoopback(ip))
+    {
+        return true;
+    }
+
+    var bytes = ip.GetAddressBytes();
+
+    // Faixas privadas IPv4: 10.0.0.0/8, 172.16.0.0/12 e 192.168.0.0/16.
+    return bytes.Length == 4 &&
+           (bytes[0] == 10 ||
+            (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+            (bytes[0] == 192 && bytes[1] == 168));
+}
+
 // Add services to the container.
 // Define política de CORS para permitir que o frontend Vite consuma a API localmente.
 builder.Services.AddCors(options =>
@@ -22,12 +54,26 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowFrontend", policy =>
     {
         policy
-            .WithOrigins(
-                "http://localhost:5173",
-                "https://localhost:5173",
-                "https://reactvite2-app.pages.dev",
-                "https://aspnetcore2-api.onrender.com"
-            )
+            .SetIsOriginAllowed(origin =>
+            {
+                if (string.IsNullOrWhiteSpace(origin))
+                {
+                    return false;
+                }
+
+                if (origin.Equals("https://reactvite2-app.pages.dev", StringComparison.OrdinalIgnoreCase) ||
+                    origin.Equals("https://aspnetcore2-api.onrender.com", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                {
+                    return false;
+                }
+
+                return uri.Scheme is "http" or "https" && IsPrivateNetworkHost(uri.Host);
+            })
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
