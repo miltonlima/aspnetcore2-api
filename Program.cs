@@ -636,6 +636,127 @@ app.MapDelete("/api/turmas/{id:long}", async (long id) =>
     }
 }).WithName("DeleteTurma");
 
+// Endpoint de inscrição do aluno em uma turma ativa.
+app.MapPost("/api/inscricoes", async (InscricaoCreate? payload) =>
+{
+    if (payload is null || payload.AlunoId <= 0 || payload.TurmaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Aluno e turma são obrigatórios." });
+    }
+
+    try
+    {
+        var statusSql = hasUsersIsActive
+            ? "coalesce(is_active, true)"
+            : hasUsersActive
+                ? "coalesce(active, true)"
+                : hasUsersStatus
+                    ? "(upper(coalesce(status, 'A')) in ('A', 'ATIVO', '1', 'TRUE'))"
+                    : hasUsersInactiveAt
+                        ? "(inactive_at is null)"
+                        : "true";
+
+        await using var alunoCmd = dataSource.CreateCommand($@"
+            select id, full_name, {statusSql} as is_active
+            from public.users
+            where id = @aluno_id
+            limit 1");
+        alunoCmd.Parameters.AddWithValue("@aluno_id", payload.AlunoId);
+        await using var alunoReader = await alunoCmd.ExecuteReaderAsync();
+
+        if (!await alunoReader.ReadAsync())
+        {
+            return Results.BadRequest(new { mensagem = "Aluno não encontrado." });
+        }
+
+        var alunoNome = alunoReader.GetString(alunoReader.GetOrdinal("full_name"));
+        var alunoAtivo = alunoReader.GetBoolean(alunoReader.GetOrdinal("is_active"));
+
+        if (!alunoAtivo)
+        {
+            return Results.BadRequest(new { mensagem = "Aluno inativo não pode realizar inscrição." });
+        }
+
+        await using var turmaCmd = dataSource.CreateCommand(@"
+            select
+                t.id,
+                t.nome_turma,
+                t.modalidade_id,
+                m.course_name,
+                coalesce(t.active, true) as active
+            from public.turma t
+            inner join public.modalidade m on m.id = t.modalidade_id
+            where t.id = @turma_id
+            limit 1");
+        turmaCmd.Parameters.AddWithValue("@turma_id", payload.TurmaId);
+        await using var turmaReader = await turmaCmd.ExecuteReaderAsync();
+
+        if (!await turmaReader.ReadAsync())
+        {
+            return Results.BadRequest(new { mensagem = "Turma não encontrada." });
+        }
+
+        var turmaNome = turmaReader.GetString(turmaReader.GetOrdinal("nome_turma"));
+        var modalidadeId = turmaReader.GetInt64(turmaReader.GetOrdinal("modalidade_id"));
+        var modalidadeNome = turmaReader.GetString(turmaReader.GetOrdinal("course_name"));
+        var turmaAtiva = turmaReader.GetBoolean(turmaReader.GetOrdinal("active"));
+
+        if (!turmaAtiva)
+        {
+            return Results.BadRequest(new { mensagem = "Esta turma está inativa e não aceita novas inscrições." });
+        }
+
+        await using var insertCmd = dataSource.CreateCommand(@"
+            insert into public.inscricao (aluno_id, turma_id, status)
+            values (@aluno_id, @turma_id, @status)
+            returning id, aluno_id, turma_id, status, created_at");
+        insertCmd.Parameters.AddWithValue("@aluno_id", payload.AlunoId);
+        insertCmd.Parameters.AddWithValue("@turma_id", payload.TurmaId);
+        insertCmd.Parameters.AddWithValue("@status", "ATIVA");
+
+        await using var insertReader = await insertCmd.ExecuteReaderAsync();
+        if (!await insertReader.ReadAsync())
+        {
+            return Results.Problem(detail: "Falha ao registrar inscrição.", title: "Erro no banco", statusCode: 500);
+        }
+
+        var inscricao = new
+        {
+            id = insertReader.GetInt64(insertReader.GetOrdinal("id")),
+            alunoId = insertReader.GetInt64(insertReader.GetOrdinal("aluno_id")),
+            alunoNome,
+            turmaId = insertReader.GetInt64(insertReader.GetOrdinal("turma_id")),
+            turmaNome,
+            modalidadeId,
+            modalidadeNome,
+            status = insertReader.GetString(insertReader.GetOrdinal("status")),
+            createdAt = insertReader.GetDateTime(insertReader.GetOrdinal("created_at"))
+        };
+
+        return Results.Created($"/api/inscricoes/{inscricao.id}", new
+        {
+            mensagem = "Inscrição realizada com sucesso.",
+            inscricao
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+    {
+        return Results.Conflict(new { mensagem = "O aluno já está inscrito nesta turma." });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.inscricao não encontrada. Execute o script SQL de criação no Supabase.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/inscricoes: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreateInscricao");
+
 // Autenticação básica: busca usuário no Supabase (tabela public.users) e compara senha.
 // OBS: Esta comparação é direta; se armazenar hash (recomendado), adapte para verificar o hash (ex.: BCrypt).
 app.MapPost("/login", async (LoginRequest? login) =>
@@ -1198,6 +1319,7 @@ record Modalidade(long Id, string CourseName, DateTime CreatedAt);
 record ModalidadeCreate(string CourseName);
 record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active);
 record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active);
+record InscricaoCreate(long AlunoId, long TurmaId);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
