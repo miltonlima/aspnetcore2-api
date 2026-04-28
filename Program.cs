@@ -636,6 +636,506 @@ app.MapDelete("/api/turmas/{id:long}", async (long id) =>
     }
 }).WithName("DeleteTurma");
 
+// Endpoints do professor para gerenciar conteúdo de turma (módulos e aulas).
+app.MapGet("/api/professor/turmas", async () =>
+{
+    try
+    {
+        var items = new List<Turma>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                t.id,
+                t.nome_turma,
+                t.modalidade_id,
+                m.course_name,
+                t.data_inicio,
+                t.data_fim,
+                coalesce(t.active, true) as active
+            from public.turma t
+            inner join public.modalidade m on m.id = t.modalidade_id
+            order by t.nome_turma");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new Turma(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+                reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+                reader.GetBoolean(6)
+            ));
+        }
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/professor/turmas: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorListTurmas");
+
+app.MapGet("/api/professor/turmas/{turmaId:long}/modulos", async (long turmaId) =>
+{
+    if (turmaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Turma inválida." });
+    }
+
+    try
+    {
+        var items = new List<object>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select id, turma_id, titulo, descricao, ordem, coalesce(active, true) as active, created_at, updated_at
+            from public.turma_modulo
+            where turma_id = @turma_id
+            order by ordem, id");
+        cmd.Parameters.AddWithValue("@turma_id", turmaId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new
+            {
+                id = reader.GetInt64(reader.GetOrdinal("id")),
+                turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+                titulo = reader.GetString(reader.GetOrdinal("titulo")),
+                descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+                ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+                active = reader.GetBoolean(reader.GetOrdinal("active")),
+                createdAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+                updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+            });
+        }
+        return Results.Ok(items);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_modulo não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/professor/turmas/{turmaId}/modulos: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorListModulos");
+
+app.MapPost("/api/professor/turmas/{turmaId:long}/modulos", async (long turmaId, ModuloCreateRequest? payload) =>
+{
+    if (turmaId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Turma, título e ordem do módulo são obrigatórios." });
+    }
+
+    try
+    {
+        await using var turmaCmd = dataSource.CreateCommand("select 1 from public.turma where id = @id limit 1");
+        turmaCmd.Parameters.AddWithValue("@id", turmaId);
+        var turmaExiste = await turmaCmd.ExecuteScalarAsync();
+        if (turmaExiste is null)
+        {
+            return Results.NotFound(new { mensagem = "Turma não encontrada." });
+        }
+
+        await using var cmd = dataSource.CreateCommand(@"
+            insert into public.turma_modulo (turma_id, titulo, descricao, ordem, active)
+            values (@turma_id, @titulo, @descricao, @ordem, @active)
+            returning id, turma_id, titulo, descricao, ordem, coalesce(active, true) as active, created_at, updated_at");
+        cmd.Parameters.AddWithValue("@turma_id", turmaId);
+        cmd.Parameters.AddWithValue("@titulo", payload.Titulo.Trim());
+        cmd.Parameters.AddWithValue("@descricao", string.IsNullOrWhiteSpace(payload.Descricao) ? (object)DBNull.Value : payload.Descricao.Trim());
+        cmd.Parameters.AddWithValue("@ordem", payload.Ordem);
+        cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao criar módulo.");
+        }
+
+        return Results.Created($"/api/professor/modulos/{reader.GetInt64(reader.GetOrdinal("id"))}", new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+            titulo = reader.GetString(reader.GetOrdinal("titulo")),
+            descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+            ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+            active = reader.GetBoolean(reader.GetOrdinal("active")),
+            createdAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+            updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_modulo não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/professor/turmas/{turmaId}/modulos: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorCreateModulo");
+
+app.MapPut("/api/professor/modulos/{moduloId:long}", async (long moduloId, ModuloCreateRequest? payload) =>
+{
+    if (moduloId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Título e ordem do módulo são obrigatórios." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            update public.turma_modulo
+            set
+                titulo = @titulo,
+                descricao = @descricao,
+                ordem = @ordem,
+                active = @active,
+                updated_at = now()
+            where id = @id
+            returning id, turma_id, titulo, descricao, ordem, coalesce(active, true) as active, created_at, updated_at");
+        cmd.Parameters.AddWithValue("@id", moduloId);
+        cmd.Parameters.AddWithValue("@titulo", payload.Titulo.Trim());
+        cmd.Parameters.AddWithValue("@descricao", string.IsNullOrWhiteSpace(payload.Descricao) ? (object)DBNull.Value : payload.Descricao.Trim());
+        cmd.Parameters.AddWithValue("@ordem", payload.Ordem);
+        cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound(new { mensagem = "Módulo não encontrado." });
+        }
+
+        return Results.Ok(new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+            titulo = reader.GetString(reader.GetOrdinal("titulo")),
+            descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+            ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+            active = reader.GetBoolean(reader.GetOrdinal("active")),
+            createdAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+            updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_modulo não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro PUT /api/professor/modulos/{moduloId}: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorUpdateModulo");
+
+app.MapDelete("/api/professor/modulos/{moduloId:long}", async (long moduloId) =>
+{
+    if (moduloId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Módulo inválido." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from public.turma_modulo where id = @id");
+        cmd.Parameters.AddWithValue("@id", moduloId);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound(new { mensagem = "Módulo não encontrado." });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_modulo não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/professor/modulos/{moduloId}: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorDeleteModulo");
+
+app.MapGet("/api/professor/turmas/{turmaId:long}/aulas", async (long turmaId) =>
+{
+    if (turmaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Turma inválida." });
+    }
+
+    try
+    {
+        var items = new List<object>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                a.id,
+                a.turma_id,
+                a.modulo_id,
+                coalesce(m.titulo, 'Geral') as modulo_titulo,
+                a.titulo,
+                a.descricao,
+                a.duracao_minutos,
+                a.ordem,
+                a.video_url,
+                coalesce(a.active, true) as active,
+                a.created_at,
+                a.updated_at
+            from public.turma_aula a
+            left join public.turma_modulo m on m.id = a.modulo_id
+            where a.turma_id = @turma_id
+            order by a.ordem, a.id");
+        cmd.Parameters.AddWithValue("@turma_id", turmaId);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new
+            {
+                id = reader.GetInt64(reader.GetOrdinal("id")),
+                turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+                moduloId = reader.IsDBNull(reader.GetOrdinal("modulo_id")) ? (long?)null : reader.GetInt64(reader.GetOrdinal("modulo_id")),
+                moduloTitulo = reader.GetString(reader.GetOrdinal("modulo_titulo")),
+                titulo = reader.GetString(reader.GetOrdinal("titulo")),
+                descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+                duracaoMinutos = reader.GetInt32(reader.GetOrdinal("duracao_minutos")),
+                ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+                videoUrl = reader.IsDBNull(reader.GetOrdinal("video_url")) ? string.Empty : reader.GetString(reader.GetOrdinal("video_url")),
+                active = reader.GetBoolean(reader.GetOrdinal("active")),
+                createdAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+                updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+            });
+        }
+
+        return Results.Ok(items);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_aula não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/professor/turmas/{turmaId}/aulas: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorListAulas");
+
+app.MapPost("/api/professor/turmas/{turmaId:long}/aulas", async (long turmaId, AulaCreateRequest? payload) =>
+{
+    if (turmaId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Turma, título e ordem da aula são obrigatórios." });
+    }
+
+    if (payload.DuracaoMinutos < 0)
+    {
+        return Results.BadRequest(new { mensagem = "Duração da aula não pode ser negativa." });
+    }
+
+    try
+    {
+        if (payload.ModuloId.HasValue)
+        {
+            await using var moduloCmd = dataSource.CreateCommand(@"
+                select 1
+                from public.turma_modulo
+                where id = @id and turma_id = @turma_id
+                limit 1");
+            moduloCmd.Parameters.AddWithValue("@id", payload.ModuloId.Value);
+            moduloCmd.Parameters.AddWithValue("@turma_id", turmaId);
+            var moduloValido = await moduloCmd.ExecuteScalarAsync();
+            if (moduloValido is null)
+            {
+                return Results.BadRequest(new { mensagem = "Módulo inválido para esta turma." });
+            }
+        }
+
+        await using var cmd = dataSource.CreateCommand(@"
+            insert into public.turma_aula (turma_id, modulo_id, titulo, descricao, duracao_minutos, ordem, video_url, active)
+            values (@turma_id, @modulo_id, @titulo, @descricao, @duracao_minutos, @ordem, @video_url, @active)
+            returning id, turma_id, modulo_id, titulo, descricao, duracao_minutos, ordem, video_url, coalesce(active, true) as active, created_at, updated_at");
+        cmd.Parameters.AddWithValue("@turma_id", turmaId);
+        cmd.Parameters.AddWithValue("@modulo_id", payload.ModuloId.HasValue ? payload.ModuloId.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@titulo", payload.Titulo.Trim());
+        cmd.Parameters.AddWithValue("@descricao", string.IsNullOrWhiteSpace(payload.Descricao) ? (object)DBNull.Value : payload.Descricao.Trim());
+        cmd.Parameters.AddWithValue("@duracao_minutos", payload.DuracaoMinutos);
+        cmd.Parameters.AddWithValue("@ordem", payload.Ordem);
+        cmd.Parameters.AddWithValue("@video_url", string.IsNullOrWhiteSpace(payload.VideoUrl) ? (object)DBNull.Value : payload.VideoUrl.Trim());
+        cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao criar aula.");
+        }
+
+        return Results.Created($"/api/professor/aulas/{reader.GetInt64(reader.GetOrdinal("id"))}", new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+            moduloId = reader.IsDBNull(reader.GetOrdinal("modulo_id")) ? (long?)null : reader.GetInt64(reader.GetOrdinal("modulo_id")),
+            titulo = reader.GetString(reader.GetOrdinal("titulo")),
+            descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+            duracaoMinutos = reader.GetInt32(reader.GetOrdinal("duracao_minutos")),
+            ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+            videoUrl = reader.IsDBNull(reader.GetOrdinal("video_url")) ? string.Empty : reader.GetString(reader.GetOrdinal("video_url")),
+            active = reader.GetBoolean(reader.GetOrdinal("active")),
+            createdAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+            updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_aula não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/professor/turmas/{turmaId}/aulas: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorCreateAula");
+
+app.MapPut("/api/professor/aulas/{aulaId:long}", async (long aulaId, AulaCreateRequest? payload) =>
+{
+    if (aulaId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Título e ordem da aula são obrigatórios." });
+    }
+
+    if (payload.DuracaoMinutos < 0)
+    {
+        return Results.BadRequest(new { mensagem = "Duração da aula não pode ser negativa." });
+    }
+
+    try
+    {
+        await using var turmaCmd = dataSource.CreateCommand("select turma_id from public.turma_aula where id = @id limit 1");
+        turmaCmd.Parameters.AddWithValue("@id", aulaId);
+        var turmaIdObj = await turmaCmd.ExecuteScalarAsync();
+        if (turmaIdObj is null)
+        {
+            return Results.NotFound(new { mensagem = "Aula não encontrada." });
+        }
+
+        var turmaId = Convert.ToInt64(turmaIdObj);
+
+        if (payload.ModuloId.HasValue)
+        {
+            await using var moduloCmd = dataSource.CreateCommand(@"
+                select 1
+                from public.turma_modulo
+                where id = @id and turma_id = @turma_id
+                limit 1");
+            moduloCmd.Parameters.AddWithValue("@id", payload.ModuloId.Value);
+            moduloCmd.Parameters.AddWithValue("@turma_id", turmaId);
+            var moduloValido = await moduloCmd.ExecuteScalarAsync();
+            if (moduloValido is null)
+            {
+                return Results.BadRequest(new { mensagem = "Módulo inválido para esta turma." });
+            }
+        }
+
+        await using var cmd = dataSource.CreateCommand(@"
+            update public.turma_aula
+            set
+                modulo_id = @modulo_id,
+                titulo = @titulo,
+                descricao = @descricao,
+                duracao_minutos = @duracao_minutos,
+                ordem = @ordem,
+                video_url = @video_url,
+                active = @active,
+                updated_at = now()
+            where id = @id
+            returning id, turma_id, modulo_id, titulo, descricao, duracao_minutos, ordem, video_url, coalesce(active, true) as active, created_at, updated_at");
+        cmd.Parameters.AddWithValue("@id", aulaId);
+        cmd.Parameters.AddWithValue("@modulo_id", payload.ModuloId.HasValue ? payload.ModuloId.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@titulo", payload.Titulo.Trim());
+        cmd.Parameters.AddWithValue("@descricao", string.IsNullOrWhiteSpace(payload.Descricao) ? (object)DBNull.Value : payload.Descricao.Trim());
+        cmd.Parameters.AddWithValue("@duracao_minutos", payload.DuracaoMinutos);
+        cmd.Parameters.AddWithValue("@ordem", payload.Ordem);
+        cmd.Parameters.AddWithValue("@video_url", string.IsNullOrWhiteSpace(payload.VideoUrl) ? (object)DBNull.Value : payload.VideoUrl.Trim());
+        cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.NotFound(new { mensagem = "Aula não encontrada." });
+        }
+
+        return Results.Ok(new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+            moduloId = reader.IsDBNull(reader.GetOrdinal("modulo_id")) ? (long?)null : reader.GetInt64(reader.GetOrdinal("modulo_id")),
+            titulo = reader.GetString(reader.GetOrdinal("titulo")),
+            descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+            duracaoMinutos = reader.GetInt32(reader.GetOrdinal("duracao_minutos")),
+            ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+            videoUrl = reader.IsDBNull(reader.GetOrdinal("video_url")) ? string.Empty : reader.GetString(reader.GetOrdinal("video_url")),
+            active = reader.GetBoolean(reader.GetOrdinal("active")),
+            createdAt = reader.GetDateTime(reader.GetOrdinal("created_at")),
+            updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_aula não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro PUT /api/professor/aulas/{aulaId}: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorUpdateAula");
+
+app.MapDelete("/api/professor/aulas/{aulaId:long}", async (long aulaId) =>
+{
+    if (aulaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Aula inválida." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from public.turma_aula where id = @id");
+        cmd.Parameters.AddWithValue("@id", aulaId);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound(new { mensagem = "Aula não encontrada." });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.turma_aula não encontrada. Execute o script SQL do LMS escolar.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/professor/aulas/{aulaId}: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ProfessorDeleteAula");
+
 // Endpoint para listar inscrições do aluno.
 app.MapGet("/api/inscricoes/aluno/{alunoId:long}", async (long alunoId) =>
 {
@@ -1618,6 +2118,8 @@ record Modalidade(long Id, string CourseName, DateTime CreatedAt);
 record ModalidadeCreate(string CourseName);
 record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active);
 record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active);
+record ModuloCreateRequest(string Titulo, string? Descricao, int Ordem, bool? Active);
+record AulaCreateRequest(long? ModuloId, string Titulo, string? Descricao, int DuracaoMinutos, int Ordem, string? VideoUrl, bool? Active);
 record InscricaoCreate(long AlunoId, long TurmaId);
 record AulaProgressUpsertRequest(long AlunoId, long TurmaId, double Percentual, bool Concluida);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);

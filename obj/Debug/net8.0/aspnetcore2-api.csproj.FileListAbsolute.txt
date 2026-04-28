@@ -1,7 +1,6 @@
 c:\temp\aspnetcore2-api\bin\Debug\net8.0\appsettings.Development.json
 c:\temp\aspnetcore2-api\bin\Debug\net8.0\appsettings.json
 c:\temp\aspnetcore2-api\bin\Debug\net8.0\aspnetcore2-api.staticwebassets.endpoints.json
-c:\temp\aspnetcore2-api\bin\Debug\net8.0\aspnetcore2-api.exe
 c:\temp\aspnetcore2-api\bin\Debug\net8.0\aspnetcore2-api.deps.json
 c:\temp\aspnetcore2-api\bin\Debug\net8.0\aspnetcore2-api.runtimeconfig.json
 c:\temp\aspnetcore2-api\bin\Debug\net8.0\aspnetcore2-api.dll
