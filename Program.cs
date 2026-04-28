@@ -696,6 +696,245 @@ app.MapGet("/api/inscricoes/aluno/{alunoId:long}", async (long alunoId) =>
     }
 }).WithName("ListInscricoesByAluno");
 
+// Dashboard do aluno com progresso por turma (experiência estilo LMS escolar).
+app.MapGet("/api/alunos/{alunoId:long}/dashboard", async (long alunoId) =>
+{
+    if (alunoId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Aluno inválido." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                i.turma_id,
+                t.nome_turma,
+                m.course_name as modalidade_nome,
+                i.created_at as inscricao_em,
+                count(a.id) as total_aulas,
+                count(a.id) filter (where coalesce(p.concluida, false)) as aulas_concluidas,
+                coalesce(sum(a.duracao_minutos), 0) as total_minutos,
+                max(p.ultimo_acesso_em) as ultimo_acesso_em
+            from public.inscricao i
+            inner join public.turma t on t.id = i.turma_id
+            inner join public.modalidade m on m.id = t.modalidade_id
+            left join public.turma_aula a
+                on a.turma_id = t.id
+                and coalesce(a.active, true) = true
+            left join public.aluno_aula_progresso p
+                on p.aula_id = a.id
+                and p.aluno_id = i.aluno_id
+            where i.aluno_id = @aluno_id
+            group by i.turma_id, t.nome_turma, m.course_name, i.created_at
+            order by coalesce(max(p.ultimo_acesso_em), i.created_at) desc");
+        cmd.Parameters.AddWithValue("@aluno_id", alunoId);
+
+        var turmas = new List<object>();
+        var turmasConcluidas = 0;
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var totalAulas = reader.GetInt64(reader.GetOrdinal("total_aulas"));
+            var aulasConcluidas = reader.GetInt64(reader.GetOrdinal("aulas_concluidas"));
+            var percentual = totalAulas > 0
+                ? Math.Round((double)aulasConcluidas * 100d / totalAulas, 1)
+                : 0d;
+
+            if (percentual >= 100d)
+            {
+                turmasConcluidas++;
+            }
+
+            var ultimoAcessoOrdinal = reader.GetOrdinal("ultimo_acesso_em");
+
+            turmas.Add(new
+            {
+                turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+                turmaNome = reader.GetString(reader.GetOrdinal("nome_turma")),
+                modalidadeNome = reader.GetString(reader.GetOrdinal("modalidade_nome")),
+                inscricaoEm = reader.GetDateTime(reader.GetOrdinal("inscricao_em")),
+                totalAulas,
+                aulasConcluidas,
+                percentualProgresso = percentual,
+                totalMinutos = reader.GetInt64(reader.GetOrdinal("total_minutos")),
+                ultimoAcessoEm = reader.IsDBNull(ultimoAcessoOrdinal) ? (DateTime?)null : reader.GetDateTime(ultimoAcessoOrdinal)
+            });
+        }
+
+        var resumo = new
+        {
+            totalTurmas = turmas.Count,
+            turmasConcluidas
+        };
+
+        return Results.Ok(new { resumo, turmas });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabelas de aula/progresso ainda não existem. Execute o script SQL de LMS escolar no Supabase.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/alunos/{alunoId}/dashboard: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("GetAlunoDashboard");
+
+// Lista aulas da turma com progresso do aluno.
+app.MapGet("/api/turmas/{turmaId:long}/aulas", async (long turmaId, long alunoId) =>
+{
+    if (turmaId <= 0 || alunoId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Turma e aluno são obrigatórios." });
+    }
+
+    try
+    {
+        await using var matriculaCmd = dataSource.CreateCommand(@"
+            select 1
+            from public.inscricao
+            where aluno_id = @aluno_id and turma_id = @turma_id
+            limit 1");
+        matriculaCmd.Parameters.AddWithValue("@aluno_id", alunoId);
+        matriculaCmd.Parameters.AddWithValue("@turma_id", turmaId);
+
+        var matriculado = await matriculaCmd.ExecuteScalarAsync();
+        if (matriculado is null)
+        {
+            return Results.Forbid();
+        }
+
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                a.id,
+                a.turma_id,
+                a.modulo_id,
+                coalesce(md.titulo, 'Geral') as modulo_titulo,
+                a.titulo,
+                a.descricao,
+                a.duracao_minutos,
+                a.ordem,
+                a.video_url,
+                coalesce(p.percentual, 0) as percentual,
+                coalesce(p.concluida, false) as concluida,
+                p.ultimo_acesso_em
+            from public.turma_aula a
+            left join public.turma_modulo md on md.id = a.modulo_id
+            left join public.aluno_aula_progresso p
+                on p.aula_id = a.id
+                and p.aluno_id = @aluno_id
+            where a.turma_id = @turma_id
+              and coalesce(a.active, true) = true
+            order by a.ordem asc, a.id asc");
+        cmd.Parameters.AddWithValue("@aluno_id", alunoId);
+        cmd.Parameters.AddWithValue("@turma_id", turmaId);
+
+        var aulas = new List<object>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var ultimoAcessoOrdinal = reader.GetOrdinal("ultimo_acesso_em");
+            aulas.Add(new
+            {
+                id = reader.GetInt64(reader.GetOrdinal("id")),
+                turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+                moduloId = reader.IsDBNull(reader.GetOrdinal("modulo_id")) ? (long?)null : reader.GetInt64(reader.GetOrdinal("modulo_id")),
+                moduloTitulo = reader.GetString(reader.GetOrdinal("modulo_titulo")),
+                titulo = reader.GetString(reader.GetOrdinal("titulo")),
+                descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+                duracaoMinutos = reader.GetInt32(reader.GetOrdinal("duracao_minutos")),
+                ordem = reader.GetInt32(reader.GetOrdinal("ordem")),
+                videoUrl = reader.IsDBNull(reader.GetOrdinal("video_url")) ? string.Empty : reader.GetString(reader.GetOrdinal("video_url")),
+                percentual = reader.GetDouble(reader.GetOrdinal("percentual")),
+                concluida = reader.GetBoolean(reader.GetOrdinal("concluida")),
+                ultimoAcessoEm = reader.IsDBNull(ultimoAcessoOrdinal) ? (DateTime?)null : reader.GetDateTime(ultimoAcessoOrdinal)
+            });
+        }
+
+        return Results.Ok(aulas);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabelas de aula/progresso ainda não existem. Execute o script SQL de LMS escolar no Supabase.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/turmas/{turmaId}/aulas: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListTurmaAulas");
+
+// Salva ou atualiza progresso de aula.
+app.MapPost("/api/aulas/{aulaId:long}/progresso", async (long aulaId, AulaProgressUpsertRequest? payload) =>
+{
+    if (aulaId <= 0 || payload is null || payload.AlunoId <= 0 || payload.TurmaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Aula, aluno e turma são obrigatórios." });
+    }
+
+    var percentual = Math.Clamp(payload.Percentual, 0, 100);
+    var concluida = payload.Concluida || percentual >= 100;
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            insert into public.aluno_aula_progresso
+                (aluno_id, turma_id, aula_id, percentual, concluida, ultimo_acesso_em)
+            values
+                (@aluno_id, @turma_id, @aula_id, @percentual, @concluida, now())
+            on conflict (aluno_id, aula_id)
+            do update set
+                turma_id = excluded.turma_id,
+                percentual = excluded.percentual,
+                concluida = excluded.concluida,
+                ultimo_acesso_em = now(),
+                updated_at = now()
+            returning id, aluno_id, turma_id, aula_id, percentual, concluida, ultimo_acesso_em, updated_at");
+        cmd.Parameters.AddWithValue("@aluno_id", payload.AlunoId);
+        cmd.Parameters.AddWithValue("@turma_id", payload.TurmaId);
+        cmd.Parameters.AddWithValue("@aula_id", aulaId);
+        cmd.Parameters.AddWithValue("@percentual", percentual);
+        cmd.Parameters.AddWithValue("@concluida", concluida);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem(detail: "Falha ao salvar progresso da aula.", title: "Erro no banco", statusCode: 500);
+        }
+
+        return Results.Ok(new
+        {
+            id = reader.GetInt64(reader.GetOrdinal("id")),
+            alunoId = reader.GetInt64(reader.GetOrdinal("aluno_id")),
+            turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+            aulaId = reader.GetInt64(reader.GetOrdinal("aula_id")),
+            percentual = reader.GetDouble(reader.GetOrdinal("percentual")),
+            concluida = reader.GetBoolean(reader.GetOrdinal("concluida")),
+            ultimoAcessoEm = reader.GetDateTime(reader.GetOrdinal("ultimo_acesso_em")),
+            updatedAt = reader.GetDateTime(reader.GetOrdinal("updated_at"))
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabelas de aula/progresso ainda não existem. Execute o script SQL de LMS escolar no Supabase.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/aulas/{aulaId}/progresso: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("UpsertAulaProgresso");
+
 // Endpoint de inscrição do aluno em uma turma ativa.
 app.MapPost("/api/inscricoes", async (InscricaoCreate? payload) =>
 {
@@ -1380,6 +1619,7 @@ record ModalidadeCreate(string CourseName);
 record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active);
 record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active);
 record InscricaoCreate(long AlunoId, long TurmaId);
+record AulaProgressUpsertRequest(long AlunoId, long TurmaId, double Percentual, bool Concluida);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
