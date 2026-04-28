@@ -636,6 +636,66 @@ app.MapDelete("/api/turmas/{id:long}", async (long id) =>
     }
 }).WithName("DeleteTurma");
 
+// Endpoint para listar inscrições do aluno.
+app.MapGet("/api/inscricoes/aluno/{alunoId:long}", async (long alunoId) =>
+{
+    if (alunoId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Aluno inválido." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                i.id,
+                i.aluno_id,
+                i.turma_id,
+                i.status,
+                i.created_at,
+                t.nome_turma,
+                t.modalidade_id,
+                m.course_name as modalidade_nome
+            from public.inscricao i
+            inner join public.turma t on t.id = i.turma_id
+            inner join public.modalidade m on m.id = t.modalidade_id
+            where i.aluno_id = @aluno_id
+            order by i.created_at desc");
+        cmd.Parameters.AddWithValue("@aluno_id", alunoId);
+
+        var inscricoes = new List<object>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            inscricoes.Add(new
+            {
+                id = reader.GetInt64(reader.GetOrdinal("id")),
+                alunoId = reader.GetInt64(reader.GetOrdinal("aluno_id")),
+                turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
+                turmaNome = reader.GetString(reader.GetOrdinal("nome_turma")),
+                modalidadeId = reader.GetInt64(reader.GetOrdinal("modalidade_id")),
+                modalidadeNome = reader.GetString(reader.GetOrdinal("modalidade_nome")),
+                status = reader.GetString(reader.GetOrdinal("status")),
+                createdAt = reader.GetDateTime(reader.GetOrdinal("created_at"))
+            });
+        }
+
+        return Results.Ok(inscricoes);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela de inscrição/turma/modalidade não encontrada.",
+            title: "Estrutura de banco ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/inscricoes/aluno/{alunoId}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListInscricoesByAluno");
+
 // Endpoint de inscrição do aluno em uma turma ativa.
 app.MapPost("/api/inscricoes", async (InscricaoCreate? payload) =>
 {
