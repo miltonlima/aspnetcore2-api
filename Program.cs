@@ -113,6 +113,111 @@ var hasUsersStatus = userColumns.Contains("status");
 var hasUsersInactiveAt = userColumns.Contains("inactive_at");
 var hasUsersUpdatedAt = userColumns.Contains("updated_at");
 
+var hasPerfilAcessoTable = false;
+var hasUsuarioPerfilAcessoTable = false;
+try
+{
+    await using var roleTablesCmd = dataSource.CreateCommand(@"
+        select table_name
+        from information_schema.tables
+        where table_schema = 'public'
+          and table_name in ('perfil_acesso', 'usuario_perfil_acesso')");
+    await using var roleTablesReader = await roleTablesCmd.ExecuteReaderAsync();
+    while (await roleTablesReader.ReadAsync())
+    {
+        var tableName = roleTablesReader.GetString(0);
+        if (tableName.Equals("perfil_acesso", StringComparison.OrdinalIgnoreCase))
+        {
+            hasPerfilAcessoTable = true;
+        }
+        else if (tableName.Equals("usuario_perfil_acesso", StringComparison.OrdinalIgnoreCase))
+        {
+            hasUsuarioPerfilAcessoTable = true;
+        }
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Falha ao ler schema de tabelas RBAC: {ex.Message}");
+}
+
+var hasRbacTables = hasPerfilAcessoTable && hasUsuarioPerfilAcessoTable;
+
+bool TryGetActorUserId(HttpRequest request, out long userId)
+{
+    userId = 0;
+
+    var fromHeader = request.Headers["x-user-id"].FirstOrDefault();
+    if (!string.IsNullOrWhiteSpace(fromHeader) && long.TryParse(fromHeader, out var parsedHeaderId) && parsedHeaderId > 0)
+    {
+        userId = parsedHeaderId;
+        return true;
+    }
+
+    var fromQuery = request.Query["userId"].FirstOrDefault();
+    if (!string.IsNullOrWhiteSpace(fromQuery) && long.TryParse(fromQuery, out var parsedQueryId) && parsedQueryId > 0)
+    {
+        userId = parsedQueryId;
+        return true;
+    }
+
+    return false;
+}
+
+async Task<List<string>> GetUserRoleCodesAsync(long userId)
+{
+    if (!hasRbacTables)
+    {
+        return new List<string>();
+    }
+
+    var roles = new List<string>();
+    await using var cmd = dataSource.CreateCommand(@"
+        select pa.codigo
+        from public.usuario_perfil_acesso up
+        inner join public.perfil_acesso pa on pa.id = up.perfil_id
+        where up.user_id = @user_id
+          and up.active = true
+          and (up.data_fim is null or up.data_fim >= current_date)
+          and pa.active = true
+        order by up.principal desc, pa.nivel desc, pa.codigo");
+    cmd.Parameters.AddWithValue("@user_id", userId);
+
+    await using var reader = await cmd.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+    {
+        roles.Add(reader.GetString(0));
+    }
+
+    return roles;
+}
+
+async Task<IResult?> AuthorizeByRoleAsync(HttpRequest request, params string[] allowedRoles)
+{
+    if (!hasRbacTables)
+    {
+        return Results.Problem(
+            detail: "Tabelas RBAC não encontradas. Execute o script sql/04_create_user_profiles_rbac.sql no Supabase.",
+            title: "Estrutura de permissões ausente",
+            statusCode: 500);
+    }
+
+    if (!TryGetActorUserId(request, out var actorUserId))
+    {
+        return Results.BadRequest(new { mensagem = "Informe o usuário autenticado via header x-user-id ou query userId." });
+    }
+
+    var roleCodes = await GetUserRoleCodesAsync(actorUserId);
+    var hasAllowedRole = roleCodes.Any(role => allowedRoles.Contains(role, StringComparer.OrdinalIgnoreCase));
+
+    if (!hasAllowedRole)
+    {
+        return Results.StatusCode(403);
+    }
+
+    return null;
+}
+
 // Aplica CORS antes de demais middlewares para garantir cabeçalhos em erros.
 app.UseCors("AllowFrontend");
 
@@ -644,8 +749,14 @@ app.MapDelete("/api/turmas/{id:long}", async (long id) =>
 }).WithName("DeleteTurma");
 
 // Endpoints do professor para gerenciar conteúdo de turma (módulos e aulas).
-app.MapGet("/api/professor/turmas", async () =>
+app.MapGet("/api/professor/turmas", async (HttpRequest request) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     try
     {
         var items = new List<Turma>();
@@ -683,8 +794,14 @@ app.MapGet("/api/professor/turmas", async () =>
     }
 }).WithName("ProfessorListTurmas");
 
-app.MapGet("/api/professor/turmas/{turmaId:long}/modulos", async (long turmaId) =>
+app.MapGet("/api/professor/turmas/{turmaId:long}/modulos", async (HttpRequest request, long turmaId) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (turmaId <= 0)
     {
         return Results.BadRequest(new { mensagem = "Turma inválida." });
@@ -730,8 +847,14 @@ app.MapGet("/api/professor/turmas/{turmaId:long}/modulos", async (long turmaId) 
     }
 }).WithName("ProfessorListModulos");
 
-app.MapPost("/api/professor/turmas/{turmaId:long}/modulos", async (long turmaId, ModuloCreateRequest? payload) =>
+app.MapPost("/api/professor/turmas/{turmaId:long}/modulos", async (HttpRequest request, long turmaId, ModuloCreateRequest? payload) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (turmaId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
     {
         return Results.BadRequest(new { mensagem = "Turma, título e ordem do módulo são obrigatórios." });
@@ -789,8 +912,14 @@ app.MapPost("/api/professor/turmas/{turmaId:long}/modulos", async (long turmaId,
     }
 }).WithName("ProfessorCreateModulo");
 
-app.MapPut("/api/professor/modulos/{moduloId:long}", async (long moduloId, ModuloCreateRequest? payload) =>
+app.MapPut("/api/professor/modulos/{moduloId:long}", async (HttpRequest request, long moduloId, ModuloCreateRequest? payload) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (moduloId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
     {
         return Results.BadRequest(new { mensagem = "Título e ordem do módulo são obrigatórios." });
@@ -846,8 +975,14 @@ app.MapPut("/api/professor/modulos/{moduloId:long}", async (long moduloId, Modul
     }
 }).WithName("ProfessorUpdateModulo");
 
-app.MapDelete("/api/professor/modulos/{moduloId:long}", async (long moduloId) =>
+app.MapDelete("/api/professor/modulos/{moduloId:long}", async (HttpRequest request, long moduloId) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (moduloId <= 0)
     {
         return Results.BadRequest(new { mensagem = "Módulo inválido." });
@@ -874,8 +1009,14 @@ app.MapDelete("/api/professor/modulos/{moduloId:long}", async (long moduloId) =>
     }
 }).WithName("ProfessorDeleteModulo");
 
-app.MapGet("/api/professor/turmas/{turmaId:long}/aulas", async (long turmaId) =>
+app.MapGet("/api/professor/turmas/{turmaId:long}/aulas", async (HttpRequest request, long turmaId) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (turmaId <= 0)
     {
         return Results.BadRequest(new { mensagem = "Turma inválida." });
@@ -940,8 +1081,14 @@ app.MapGet("/api/professor/turmas/{turmaId:long}/aulas", async (long turmaId) =>
     }
 }).WithName("ProfessorListAulas");
 
-app.MapPost("/api/professor/turmas/{turmaId:long}/aulas", async (long turmaId, AulaCreateRequest? payload) =>
+app.MapPost("/api/professor/turmas/{turmaId:long}/aulas", async (HttpRequest request, long turmaId, AulaCreateRequest? payload) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (turmaId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
     {
         return Results.BadRequest(new { mensagem = "Turma, título e ordem da aula são obrigatórios." });
@@ -1018,8 +1165,14 @@ app.MapPost("/api/professor/turmas/{turmaId:long}/aulas", async (long turmaId, A
     }
 }).WithName("ProfessorCreateAula");
 
-app.MapPut("/api/professor/aulas/{aulaId:long}", async (long aulaId, AulaCreateRequest? payload) =>
+app.MapPut("/api/professor/aulas/{aulaId:long}", async (HttpRequest request, long aulaId, AulaCreateRequest? payload) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (aulaId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.Titulo) || payload.Ordem <= 0)
     {
         return Results.BadRequest(new { mensagem = "Título e ordem da aula são obrigatórios." });
@@ -1115,8 +1268,14 @@ app.MapPut("/api/professor/aulas/{aulaId:long}", async (long aulaId, AulaCreateR
     }
 }).WithName("ProfessorUpdateAula");
 
-app.MapDelete("/api/professor/aulas/{aulaId:long}", async (long aulaId) =>
+app.MapDelete("/api/professor/aulas/{aulaId:long}", async (HttpRequest request, long aulaId) =>
 {
+    var authError = await AuthorizeByRoleAsync(request, "PROFESSOR", "COORDENADOR", "GERENTE", "ADMINISTRADOR");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
     if (aulaId <= 0)
     {
         return Results.BadRequest(new { mensagem = "Aula inválida." });
@@ -1574,6 +1733,12 @@ app.MapPost("/login", async (LoginRequest? login) =>
 
     try
     {
+        long userId;
+        string fullName;
+        DateTime birthDate;
+        string sex;
+        string email;
+
         await using var cmd = dataSource.CreateCommand("select id, full_name, birth_date, sex, email, password_hash from public.users where email = @email limit 1");
         cmd.Parameters.AddWithValue("@email", login.Email.Trim());
 
@@ -1599,13 +1764,25 @@ app.MapPost("/login", async (LoginRequest? login) =>
             return Results.Unauthorized();
         }
 
+        userId = reader.GetInt64(reader.GetOrdinal("id"));
+        fullName = reader.GetString(reader.GetOrdinal("full_name"));
+        birthDate = reader.GetDateTime(reader.GetOrdinal("birth_date"));
+        sex = reader.GetString(reader.GetOrdinal("sex"));
+        email = reader.GetString(reader.GetOrdinal("email"));
+        await reader.DisposeAsync();
+
+        var roleCodes = await GetUserRoleCodesAsync(userId);
+        var perfilPrincipal = roleCodes.FirstOrDefault() ?? "ALUNO";
+
         var user = new
         {
-            id = reader.GetInt64(reader.GetOrdinal("id")),
-            full_name = reader.GetString(reader.GetOrdinal("full_name")),
-            birth_date = reader.GetDateTime(reader.GetOrdinal("birth_date")),
-            sex = reader.GetString(reader.GetOrdinal("sex")),
-            email = reader.GetString(reader.GetOrdinal("email"))
+            id = userId,
+            full_name = fullName,
+            birth_date = birthDate,
+            sex,
+            email,
+            perfil = perfilPrincipal,
+            perfis = roleCodes.Count > 0 ? roleCodes.ToArray() : new[] { "ALUNO" }
         };
 
         return Results.Ok(new { mensagem = "Login válido.", usuario = user });
@@ -1686,13 +1863,32 @@ app.MapPost("/register", async (RegisterRequest? register) =>
             return Results.Problem("Falha ao criar usuário.");
         }
 
+        var userId = reader.GetInt64(reader.GetOrdinal("id"));
+        var fullName = reader.GetString(reader.GetOrdinal("full_name"));
+        var birthDate = reader.GetDateTime(reader.GetOrdinal("birth_date"));
+        var sex = reader.GetString(reader.GetOrdinal("sex"));
+        var email = reader.GetString(reader.GetOrdinal("email"));
+        await reader.DisposeAsync();
+
+        if (hasRbacTables)
+        {
+            await using var roleCmd = dataSource.CreateCommand(@"
+                insert into public.usuario_perfil_acesso (user_id, perfil_id, principal, active)
+                select @user_id, p.id, true, true
+                from public.perfil_acesso p
+                where p.codigo = 'ALUNO'
+                on conflict (user_id, perfil_id) do nothing");
+            roleCmd.Parameters.AddWithValue("@user_id", userId);
+            await roleCmd.ExecuteNonQueryAsync();
+        }
+
         var user = new
         {
-            id = reader.GetInt64(reader.GetOrdinal("id")),
-            full_name = reader.GetString(reader.GetOrdinal("full_name")),
-            birth_date = reader.GetDateTime(reader.GetOrdinal("birth_date")),
-            sex = reader.GetString(reader.GetOrdinal("sex")),
-            email = reader.GetString(reader.GetOrdinal("email"))
+            id = userId,
+            full_name = fullName,
+            birth_date = birthDate,
+            sex,
+            email
         };
 
         return Results.Created($"/register/{user.id}", new { mensagem = "Cadastro realizado com sucesso.", usuario = user });
@@ -1708,6 +1904,232 @@ app.MapPost("/register", async (RegisterRequest? register) =>
         return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
     }
 }).WithName("Register");
+
+// Endpoints administrativos para gestão de perfis por usuário.
+app.MapGet("/api/admin/perfis", async (HttpRequest request) =>
+{
+    var authError = await AuthorizeByRoleAsync(request, "ADMINISTRADOR", "GERENTE");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
+    try
+    {
+        var items = new List<object>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select id, codigo, nome, descricao, nivel, active
+            from public.perfil_acesso
+            order by nivel desc, codigo");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new
+            {
+                id = reader.GetInt16(reader.GetOrdinal("id")),
+                codigo = reader.GetString(reader.GetOrdinal("codigo")),
+                nome = reader.GetString(reader.GetOrdinal("nome")),
+                descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
+                nivel = reader.GetInt16(reader.GetOrdinal("nivel")),
+                active = reader.GetBoolean(reader.GetOrdinal("active"))
+            });
+        }
+
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/admin/perfis: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("AdminListPerfis");
+
+app.MapGet("/api/admin/usuarios/{userId:long}/perfis", async (HttpRequest request, long userId) =>
+{
+    var authError = await AuthorizeByRoleAsync(request, "ADMINISTRADOR", "GERENTE");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
+    if (userId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Usuário inválido." });
+    }
+
+    try
+    {
+        var items = new List<object>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                up.id,
+                up.user_id,
+                pa.codigo,
+                pa.nome,
+                pa.nivel,
+                up.principal,
+                up.active,
+                up.data_inicio,
+                up.data_fim,
+                up.observacao
+            from public.usuario_perfil_acesso up
+            inner join public.perfil_acesso pa on pa.id = up.perfil_id
+            where up.user_id = @user_id
+            order by up.principal desc, pa.nivel desc, pa.codigo");
+        cmd.Parameters.AddWithValue("@user_id", userId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            items.Add(new
+            {
+                id = reader.GetInt64(reader.GetOrdinal("id")),
+                userId = reader.GetInt64(reader.GetOrdinal("user_id")),
+                perfilCodigo = reader.GetString(reader.GetOrdinal("codigo")),
+                perfilNome = reader.GetString(reader.GetOrdinal("nome")),
+                perfilNivel = reader.GetInt16(reader.GetOrdinal("nivel")),
+                principal = reader.GetBoolean(reader.GetOrdinal("principal")),
+                active = reader.GetBoolean(reader.GetOrdinal("active")),
+                dataInicio = reader.GetDateTime(reader.GetOrdinal("data_inicio")),
+                dataFim = reader.IsDBNull(reader.GetOrdinal("data_fim")) ? (DateTime?)null : reader.GetDateTime(reader.GetOrdinal("data_fim")),
+                observacao = reader.IsDBNull(reader.GetOrdinal("observacao")) ? string.Empty : reader.GetString(reader.GetOrdinal("observacao"))
+            });
+        }
+
+        return Results.Ok(items);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/admin/usuarios/{userId}/perfis: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("AdminListUserPerfis");
+
+app.MapPost("/api/admin/usuarios/{userId:long}/perfis", async (HttpRequest request, long userId, UserRoleAssignRequest? payload) =>
+{
+    var authError = await AuthorizeByRoleAsync(request, "ADMINISTRADOR", "GERENTE");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
+    if (userId <= 0 || payload is null || string.IsNullOrWhiteSpace(payload.PerfilCodigo))
+    {
+        return Results.BadRequest(new { mensagem = "Usuário e perfil são obrigatórios." });
+    }
+
+    try
+    {
+        await using var tx = await dataSource.OpenConnectionAsync();
+        await using var beginCmd = new NpgsqlCommand("begin", tx);
+        await beginCmd.ExecuteNonQueryAsync();
+
+        await using var checkUserCmd = new NpgsqlCommand("select 1 from public.users where id = @id limit 1", tx);
+        checkUserCmd.Parameters.AddWithValue("@id", userId);
+        var userExists = await checkUserCmd.ExecuteScalarAsync();
+        if (userExists is null)
+        {
+            await using var rollbackMissingUser = new NpgsqlCommand("rollback", tx);
+            await rollbackMissingUser.ExecuteNonQueryAsync();
+            return Results.NotFound(new { mensagem = "Usuário não encontrado." });
+        }
+
+        var perfilCodigo = payload.PerfilCodigo.Trim().ToUpperInvariant();
+        await using var checkPerfilCmd = new NpgsqlCommand(@"
+            select id
+            from public.perfil_acesso
+            where codigo = @codigo and active = true
+            limit 1", tx);
+        checkPerfilCmd.Parameters.AddWithValue("@codigo", perfilCodigo);
+        var perfilIdObj = await checkPerfilCmd.ExecuteScalarAsync();
+        if (perfilIdObj is null)
+        {
+            await using var rollbackMissingRole = new NpgsqlCommand("rollback", tx);
+            await rollbackMissingRole.ExecuteNonQueryAsync();
+            return Results.BadRequest(new { mensagem = "Perfil inválido ou inativo." });
+        }
+
+        if (payload.Principal)
+        {
+            await using var clearPrincipalCmd = new NpgsqlCommand(@"
+                update public.usuario_perfil_acesso
+                set principal = false, updated_at = now()
+                where user_id = @user_id", tx);
+            clearPrincipalCmd.Parameters.AddWithValue("@user_id", userId);
+            await clearPrincipalCmd.ExecuteNonQueryAsync();
+        }
+
+        await using var upsertCmd = new NpgsqlCommand(@"
+            insert into public.usuario_perfil_acesso (user_id, perfil_id, principal, active, data_inicio, data_fim, observacao)
+            values (@user_id, @perfil_id, @principal, true, current_date, null, @observacao)
+            on conflict (user_id, perfil_id)
+            do update set
+                principal = excluded.principal,
+                active = true,
+                data_fim = null,
+                observacao = excluded.observacao,
+                updated_at = now()", tx);
+        upsertCmd.Parameters.AddWithValue("@user_id", userId);
+        upsertCmd.Parameters.AddWithValue("@perfil_id", Convert.ToInt16(perfilIdObj));
+        upsertCmd.Parameters.AddWithValue("@principal", payload.Principal);
+        upsertCmd.Parameters.AddWithValue("@observacao", string.IsNullOrWhiteSpace(payload.Observacao) ? (object)DBNull.Value : payload.Observacao.Trim());
+        await upsertCmd.ExecuteNonQueryAsync();
+
+        await using var commitCmd = new NpgsqlCommand("commit", tx);
+        await commitCmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new { mensagem = "Perfil vinculado ao usuário com sucesso.", userId, perfilCodigo, principal = payload.Principal });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/admin/usuarios/{userId}/perfis: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("AdminAssignPerfilToUser");
+
+app.MapDelete("/api/admin/usuarios/{userId:long}/perfis/{perfilCodigo}", async (HttpRequest request, long userId, string perfilCodigo) =>
+{
+    var authError = await AuthorizeByRoleAsync(request, "ADMINISTRADOR", "GERENTE");
+    if (authError is not null)
+    {
+        return authError;
+    }
+
+    if (userId <= 0 || string.IsNullOrWhiteSpace(perfilCodigo))
+    {
+        return Results.BadRequest(new { mensagem = "Usuário e perfil são obrigatórios." });
+    }
+
+    try
+    {
+        await using var cmd = dataSource.CreateCommand(@"
+            update public.usuario_perfil_acesso up
+            set
+                active = false,
+                principal = false,
+                data_fim = current_date,
+                updated_at = now()
+            from public.perfil_acesso pa
+            where up.perfil_id = pa.id
+              and up.user_id = @user_id
+              and pa.codigo = @perfil_codigo
+              and up.active = true");
+        cmd.Parameters.AddWithValue("@user_id", userId);
+        cmd.Parameters.AddWithValue("@perfil_codigo", perfilCodigo.Trim().ToUpperInvariant());
+
+        var rows = await cmd.ExecuteNonQueryAsync();
+        if (rows == 0)
+        {
+            return Results.NotFound(new { mensagem = "Perfil ativo não encontrado para este usuário." });
+        }
+
+        return Results.Ok(new { mensagem = "Perfil removido do usuário com sucesso.", userId, perfilCodigo = perfilCodigo.Trim().ToUpperInvariant() });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/admin/usuarios/{userId}/perfis/{perfilCodigo}: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("AdminRemovePerfilFromUser");
 
 // Lista alunos com opção de incluir inativos.
 app.MapGet("/api/alunos", async (bool includeInactive = false) =>
@@ -2132,6 +2554,7 @@ record AulaProgressUpsertRequest(long AlunoId, long TurmaId, double Percentual, 
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
+record UserRoleAssignRequest(string PerfilCodigo, bool Principal, string? Observacao);
 
 
 
