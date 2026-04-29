@@ -212,7 +212,14 @@ async Task<IResult?> AuthorizeByRoleAsync(HttpRequest request, params string[] a
 
     if (!hasAllowedRole)
     {
-        return Results.StatusCode(403);
+        return Results.Json(new
+        {
+            mensagem = "Usuário não possui perfil permitido para esta rota.",
+            userId = actorUserId,
+            perfisUsuario = roleCodes,
+            perfisPermitidos = allowedRoles,
+            dica = "Vincule um perfil adequado usando os endpoints /api/admin/usuarios/{userId}/perfis."
+        }, statusCode: 403);
     }
 
     return null;
@@ -1906,6 +1913,96 @@ app.MapPost("/register", async (RegisterRequest? register) =>
 }).WithName("Register");
 
 // Endpoints administrativos para gestão de perfis por usuário.
+app.MapPost("/api/admin/bootstrap-admin", async (HttpRequest request, BootstrapAdminRequest? payload) =>
+{
+    if (!hasRbacTables)
+    {
+        return Results.Problem(
+            detail: "Tabelas RBAC não encontradas. Execute o script sql/04_create_user_profiles_rbac.sql no Supabase.",
+            title: "Estrutura de permissões ausente",
+            statusCode: 500);
+    }
+
+    if (!TryGetActorUserId(request, out var actorUserId) && (payload is null || payload.UserId <= 0))
+    {
+        return Results.BadRequest(new { mensagem = "Informe x-user-id (ou userId na query) ou envie userId no corpo." });
+    }
+
+    var targetUserId = payload?.UserId > 0 ? payload.UserId : actorUserId;
+
+    try
+    {
+        await using var checkPrivilegedCmd = dataSource.CreateCommand(@"
+            select 1
+            from public.usuario_perfil_acesso up
+            inner join public.perfil_acesso pa on pa.id = up.perfil_id
+            where up.active = true
+              and (up.data_fim is null or up.data_fim >= current_date)
+              and pa.active = true
+              and pa.codigo in ('ADMINISTRADOR', 'GERENTE')
+            limit 1");
+        var hasPrivilegedUser = await checkPrivilegedCmd.ExecuteScalarAsync() is not null;
+        if (hasPrivilegedUser)
+        {
+            return Results.Conflict(new
+            {
+                mensagem = "Bootstrap bloqueado: já existe usuário ADMINISTRADOR/GERENTE.",
+                dica = "Use os endpoints administrativos padrão para gerir perfis."
+            });
+        }
+
+        await using var checkUserCmd = dataSource.CreateCommand("select 1 from public.users where id = @id limit 1");
+        checkUserCmd.Parameters.AddWithValue("@id", targetUserId);
+        var userExists = await checkUserCmd.ExecuteScalarAsync() is not null;
+        if (!userExists)
+        {
+            return Results.NotFound(new { mensagem = "Usuário alvo não encontrado." });
+        }
+
+        await using var txConn = await dataSource.OpenConnectionAsync();
+        await using var beginCmd = new NpgsqlCommand("begin", txConn);
+        await beginCmd.ExecuteNonQueryAsync();
+
+        await using var clearPrincipalCmd = new NpgsqlCommand(@"
+            update public.usuario_perfil_acesso
+            set principal = false, updated_at = now()
+            where user_id = @user_id", txConn);
+        clearPrincipalCmd.Parameters.AddWithValue("@user_id", targetUserId);
+        await clearPrincipalCmd.ExecuteNonQueryAsync();
+
+        await using var assignCmd = new NpgsqlCommand(@"
+            insert into public.usuario_perfil_acesso (user_id, perfil_id, principal, active, data_inicio, data_fim, observacao)
+            select @user_id, p.id, true, true, current_date, null, @observacao
+            from public.perfil_acesso p
+            where p.codigo = 'ADMINISTRADOR'
+            on conflict (user_id, perfil_id)
+            do update set
+                principal = true,
+                active = true,
+                data_fim = null,
+                observacao = excluded.observacao,
+                updated_at = now()", txConn);
+        assignCmd.Parameters.AddWithValue("@user_id", targetUserId);
+        assignCmd.Parameters.AddWithValue("@observacao", "Bootstrap inicial de administrador");
+        await assignCmd.ExecuteNonQueryAsync();
+
+        await using var commitCmd = new NpgsqlCommand("commit", txConn);
+        await commitCmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new
+        {
+            mensagem = "Bootstrap concluído. Perfil ADMINISTRADOR vinculado com sucesso.",
+            userId = targetUserId,
+            perfil = "ADMINISTRADOR"
+        });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/admin/bootstrap-admin: {ex.Message}\\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("AdminBootstrap");
+
 app.MapGet("/api/admin/perfis", async (HttpRequest request) =>
 {
     var authError = await AuthorizeByRoleAsync(request, "ADMINISTRADOR", "GERENTE");
@@ -2554,6 +2651,7 @@ record AulaProgressUpsertRequest(long AlunoId, long TurmaId, double Percentual, 
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
+record BootstrapAdminRequest(long UserId);
 record UserRoleAssignRequest(string PerfilCodigo, bool Principal, string? Observacao);
 
 
