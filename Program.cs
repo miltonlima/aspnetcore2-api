@@ -84,6 +84,7 @@ builder.Services.AddSwaggerGen();
 
 // Constrói o pipeline de requisições a partir dos serviços definidos.
 var app = builder.Build();
+var isDevelopment = app.Environment.IsDevelopment();
 
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 
@@ -209,6 +210,27 @@ async Task<IResult?> AuthorizeByRoleAsync(HttpRequest request, params string[] a
 
     var roleCodes = await GetUserRoleCodesAsync(actorUserId);
     var hasAllowedRole = roleCodes.Any(role => allowedRoles.Contains(role, StringComparer.OrdinalIgnoreCase));
+
+    // Fallback de bootstrap apenas em desenvolvimento: se não existir nenhum usuário
+    // privilegiado ainda, permite temporariamente usuários autenticados com qualquer perfil ativo.
+    if (!hasAllowedRole && isDevelopment)
+    {
+        await using var hasPrivilegedCmd = dataSource.CreateCommand(@"
+            select 1
+            from public.usuario_perfil_acesso up
+            inner join public.perfil_acesso pa on pa.id = up.perfil_id
+            where up.active = true
+              and (up.data_fim is null or up.data_fim >= current_date)
+              and pa.active = true
+              and pa.codigo in ('ADMINISTRADOR', 'GERENTE', 'COORDENADOR', 'PROFESSOR')
+            limit 1");
+        var privilegedExists = await hasPrivilegedCmd.ExecuteScalarAsync() is not null;
+
+        if (!privilegedExists && roleCodes.Count > 0)
+        {
+            return null;
+        }
+    }
 
     if (!hasAllowedRole)
     {
