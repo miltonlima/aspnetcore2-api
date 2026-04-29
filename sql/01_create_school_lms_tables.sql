@@ -97,7 +97,7 @@ returns trigger
 language plpgsql
 as $$
 begin
-    new.updated_at = now();
+    new := json_populate_record(new, json_build_object('updated_at', now()));
     return new;
 end;
 $$;

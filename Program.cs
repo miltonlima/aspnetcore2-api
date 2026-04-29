@@ -613,6 +613,13 @@ app.MapPut("/api/turmas/{id:long}", async (long id, TurmaCreate payload) =>
         );
         return Results.Ok(updated);
     }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedColumn)
+    {
+        return Results.Problem(
+            detail: "Schema da tabela turma desatualizado (coluna ausente). Execute o script sql/03_fix_updated_at_columns_and_trigger.sql no banco.",
+            title: "Estrutura de banco incompatível",
+            statusCode: 500);
+    }
     catch (Exception ex)
     {
         Console.WriteLine($"Erro PUT /api/turmas/{id}: {ex.Message}\n{ex.StackTrace}");
