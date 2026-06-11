@@ -2297,14 +2297,14 @@ app.MapGet("/api/alunos", async (bool includeInactive = false) =>
         var sql = $@"
             select
                 id,
-                full_name,
-                birth_date,
-                sex,
-                email,
+                coalesce(nullif(full_name, ''), email, 'Aluno sem nome') as full_name,
+                coalesce(birth_date, date '1900-01-01') as birth_date,
+                coalesce(sex, '') as sex,
+                coalesce(email, '') as email,
                 {statusSql} as is_active
             from public.users
             {whereSql}
-            order by full_name";
+            order by coalesce(nullif(full_name, ''), email, 'Aluno sem nome')";
 
         var items = new List<StudentListItem>();
         await using var cmd = dataSource.CreateCommand(sql);
@@ -2357,10 +2357,10 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
         var sql = $@"
             select
                 id,
-                full_name,
-                birth_date,
-                sex,
-                email,
+                coalesce(nullif(full_name, ''), email, 'Aluno sem nome') as full_name,
+                coalesce(birth_date, date '1900-01-01') as birth_date,
+                coalesce(sex, '') as sex,
+                coalesce(email, '') as email,
                 {statusSql} as is_active,
                 {inactiveAtSql} as inactive_at
             from public.users
