@@ -777,6 +777,421 @@ app.MapDelete("/api/turmas/{id:long}", async (long id) =>
     }
 }).WithName("DeleteTurma");
 
+// CRUD do banco de questoes nas tabelas public.pergunta e public.alternativa.
+app.MapGet("/api/perguntas", async () =>
+{
+    try
+    {
+        var perguntas = new Dictionary<long, PerguntaDto>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                p.id,
+                p.enunciado,
+                p.dificuldade,
+                p.status,
+                p.created_at,
+                p.updated_at,
+                a.id as alternativa_id,
+                a.texto,
+                a.correta,
+                a.ordem
+            from public.pergunta p
+            left join public.alternativa a on a.pergunta_id = p.id
+            order by p.id desc, a.ordem asc, a.id asc");
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var perguntaId = reader.GetInt64(0);
+            if (!perguntas.TryGetValue(perguntaId, out var pergunta))
+            {
+                pergunta = new PerguntaDto(
+                    perguntaId,
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    new List<AlternativaDto>(),
+                    reader.GetDateTime(4),
+                    reader.GetDateTime(5));
+                perguntas.Add(perguntaId, pergunta);
+            }
+
+            if (!reader.IsDBNull(6))
+            {
+                pergunta.Alternativas.Add(new AlternativaDto(
+                    reader.GetInt64(6),
+                    reader.GetString(7),
+                    reader.GetBoolean(8),
+                    reader.GetInt32(9)));
+            }
+        }
+
+        return Results.Ok(perguntas.Values);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabelas public.pergunta/public.alternativa nao encontradas. Execute o script SQL do banco de questoes no Supabase.",
+            title: "Estrutura de banco indisponivel",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/perguntas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListPerguntas");
+
+app.MapPost("/api/perguntas", async (PerguntaUpsertRequest? payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Enunciado))
+    {
+        return Results.BadRequest(new { mensagem = "Enunciado e obrigatorio." });
+    }
+
+    var alternativas = (payload.Alternativas ?? new List<AlternativaUpsertRequest>())
+        .Select((item, index) => new AlternativaUpsertRequest(
+            item.Id,
+            item.Texto?.Trim() ?? string.Empty,
+            item.Correta,
+            item.Ordem > 0 ? item.Ordem : index + 1))
+        .Where(item => !string.IsNullOrWhiteSpace(item.Texto))
+        .ToList();
+
+    if (alternativas.Count < 2)
+    {
+        return Results.BadRequest(new { mensagem = "Informe pelo menos duas alternativas." });
+    }
+
+    if (alternativas.Count(item => item.Correta) != 1)
+    {
+        return Results.BadRequest(new { mensagem = "Informe exatamente uma alternativa correta." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        await using var perguntaCmd = new NpgsqlCommand(@"
+            insert into public.pergunta (enunciado, dificuldade, status)
+            values (@enunciado, @dificuldade, @status)
+            returning id, enunciado, dificuldade, status, created_at, updated_at", conn, tx);
+        perguntaCmd.Parameters.AddWithValue("@enunciado", payload.Enunciado.Trim());
+        perguntaCmd.Parameters.AddWithValue("@dificuldade", string.IsNullOrWhiteSpace(payload.Dificuldade) ? "Facil" : payload.Dificuldade.Trim());
+        perguntaCmd.Parameters.AddWithValue("@status", string.IsNullOrWhiteSpace(payload.Status) ? "Ativa" : payload.Status.Trim());
+
+        long perguntaId;
+        PerguntaDto created;
+        await using (var reader = await perguntaCmd.ExecuteReaderAsync())
+        {
+            if (!await reader.ReadAsync())
+            {
+                await tx.RollbackAsync();
+                return Results.Problem("Falha ao inserir pergunta.");
+            }
+
+            perguntaId = reader.GetInt64(0);
+            created = new PerguntaDto(
+                perguntaId,
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                new List<AlternativaDto>(),
+                reader.GetDateTime(4),
+                reader.GetDateTime(5));
+        }
+
+        foreach (var alternativa in alternativas.OrderBy(item => item.Ordem))
+        {
+            await using var alternativaCmd = new NpgsqlCommand(@"
+                insert into public.alternativa (pergunta_id, texto, correta, ordem)
+                values (@pergunta_id, @texto, @correta, @ordem)
+                returning id, texto, correta, ordem", conn, tx);
+            alternativaCmd.Parameters.AddWithValue("@pergunta_id", perguntaId);
+            alternativaCmd.Parameters.AddWithValue("@texto", alternativa.Texto.Trim());
+            alternativaCmd.Parameters.AddWithValue("@correta", alternativa.Correta);
+            alternativaCmd.Parameters.AddWithValue("@ordem", alternativa.Ordem);
+
+            await using var alternativaReader = await alternativaCmd.ExecuteReaderAsync();
+            if (await alternativaReader.ReadAsync())
+            {
+                created.Alternativas.Add(new AlternativaDto(
+                    alternativaReader.GetInt64(0),
+                    alternativaReader.GetString(1),
+                    alternativaReader.GetBoolean(2),
+                    alternativaReader.GetInt32(3)));
+            }
+        }
+
+        await tx.CommitAsync();
+        return Results.Created($"/api/perguntas/{created.Id}", created);
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro POST /api/perguntas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreatePergunta");
+
+app.MapPut("/api/perguntas/{id:long}", async (long id, PerguntaUpsertRequest? payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Enunciado))
+    {
+        return Results.BadRequest(new { mensagem = "Enunciado e obrigatorio." });
+    }
+
+    var alternativas = (payload.Alternativas ?? new List<AlternativaUpsertRequest>())
+        .Select((item, index) => new AlternativaUpsertRequest(
+            item.Id,
+            item.Texto?.Trim() ?? string.Empty,
+            item.Correta,
+            item.Ordem > 0 ? item.Ordem : index + 1))
+        .Where(item => !string.IsNullOrWhiteSpace(item.Texto))
+        .ToList();
+
+    if (alternativas.Count < 2)
+    {
+        return Results.BadRequest(new { mensagem = "Informe pelo menos duas alternativas." });
+    }
+
+    if (alternativas.Count(item => item.Correta) != 1)
+    {
+        return Results.BadRequest(new { mensagem = "Informe exatamente uma alternativa correta." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        await using var perguntaCmd = new NpgsqlCommand(@"
+            update public.pergunta
+            set enunciado = @enunciado,
+                dificuldade = @dificuldade,
+                status = @status
+            where id = @id
+            returning id, enunciado, dificuldade, status, created_at, updated_at", conn, tx);
+        perguntaCmd.Parameters.AddWithValue("@id", id);
+        perguntaCmd.Parameters.AddWithValue("@enunciado", payload.Enunciado.Trim());
+        perguntaCmd.Parameters.AddWithValue("@dificuldade", string.IsNullOrWhiteSpace(payload.Dificuldade) ? "Facil" : payload.Dificuldade.Trim());
+        perguntaCmd.Parameters.AddWithValue("@status", string.IsNullOrWhiteSpace(payload.Status) ? "Ativa" : payload.Status.Trim());
+
+        PerguntaDto updated;
+        await using (var reader = await perguntaCmd.ExecuteReaderAsync())
+        {
+            if (!await reader.ReadAsync())
+            {
+                await tx.RollbackAsync();
+                return Results.NotFound(new { mensagem = "Pergunta nao encontrada." });
+            }
+
+            updated = new PerguntaDto(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                new List<AlternativaDto>(),
+                reader.GetDateTime(4),
+                reader.GetDateTime(5));
+        }
+
+        await using var deleteCmd = new NpgsqlCommand("delete from public.alternativa where pergunta_id = @pergunta_id", conn, tx);
+        deleteCmd.Parameters.AddWithValue("@pergunta_id", id);
+        await deleteCmd.ExecuteNonQueryAsync();
+
+        foreach (var alternativa in alternativas.OrderBy(item => item.Ordem))
+        {
+            await using var alternativaCmd = new NpgsqlCommand(@"
+                insert into public.alternativa (pergunta_id, texto, correta, ordem)
+                values (@pergunta_id, @texto, @correta, @ordem)
+                returning id, texto, correta, ordem", conn, tx);
+            alternativaCmd.Parameters.AddWithValue("@pergunta_id", id);
+            alternativaCmd.Parameters.AddWithValue("@texto", alternativa.Texto.Trim());
+            alternativaCmd.Parameters.AddWithValue("@correta", alternativa.Correta);
+            alternativaCmd.Parameters.AddWithValue("@ordem", alternativa.Ordem);
+
+            await using var alternativaReader = await alternativaCmd.ExecuteReaderAsync();
+            if (await alternativaReader.ReadAsync())
+            {
+                updated.Alternativas.Add(new AlternativaDto(
+                    alternativaReader.GetInt64(0),
+                    alternativaReader.GetString(1),
+                    alternativaReader.GetBoolean(2),
+                    alternativaReader.GetInt32(3)));
+            }
+        }
+
+        await tx.CommitAsync();
+        return Results.Ok(updated);
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro PUT /api/perguntas/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("UpdatePergunta");
+
+app.MapDelete("/api/perguntas/{id:long}", async (long id) =>
+{
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from public.pergunta where id = @id");
+        cmd.Parameters.AddWithValue("@id", id);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound(new { mensagem = "Pergunta nao encontrada." });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/perguntas/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("DeletePergunta");
+
+app.MapPost("/api/perguntas/{perguntaId:long}/alternativas", async (long perguntaId, AlternativaUpsertRequest? payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Texto))
+    {
+        return Results.BadRequest(new { mensagem = "Texto da alternativa e obrigatorio." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        if (payload.Correta)
+        {
+            await using var clearCmd = new NpgsqlCommand("update public.alternativa set correta = false where pergunta_id = @pergunta_id", conn, tx);
+            clearCmd.Parameters.AddWithValue("@pergunta_id", perguntaId);
+            await clearCmd.ExecuteNonQueryAsync();
+        }
+
+        await using var cmd = new NpgsqlCommand(@"
+            insert into public.alternativa (pergunta_id, texto, correta, ordem)
+            values (@pergunta_id, @texto, @correta, @ordem)
+            returning id, texto, correta, ordem", conn, tx);
+        cmd.Parameters.AddWithValue("@pergunta_id", perguntaId);
+        cmd.Parameters.AddWithValue("@texto", payload.Texto.Trim());
+        cmd.Parameters.AddWithValue("@correta", payload.Correta);
+        cmd.Parameters.AddWithValue("@ordem", payload.Ordem > 0 ? payload.Ordem : 1);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            await tx.RollbackAsync();
+            return Results.Problem("Falha ao inserir alternativa.");
+        }
+
+        var created = new AlternativaDto(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetBoolean(2),
+            reader.GetInt32(3));
+
+        await tx.CommitAsync();
+        return Results.Created($"/api/alternativas/{created.Id}", created);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation)
+    {
+        await tx.RollbackAsync();
+        return Results.NotFound(new { mensagem = "Pergunta nao encontrada." });
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro POST /api/perguntas/{perguntaId}/alternativas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreateAlternativa");
+
+app.MapPut("/api/alternativas/{id:long}", async (long id, AlternativaUpsertRequest? payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Texto))
+    {
+        return Results.BadRequest(new { mensagem = "Texto da alternativa e obrigatorio." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        long? perguntaId = null;
+        await using (var perguntaCmd = new NpgsqlCommand("select pergunta_id from public.alternativa where id = @id", conn, tx))
+        {
+            perguntaCmd.Parameters.AddWithValue("@id", id);
+            var result = await perguntaCmd.ExecuteScalarAsync();
+            if (result is null)
+            {
+                await tx.RollbackAsync();
+                return Results.NotFound(new { mensagem = "Alternativa nao encontrada." });
+            }
+            perguntaId = Convert.ToInt64(result);
+        }
+
+        if (payload.Correta)
+        {
+            await using var clearCmd = new NpgsqlCommand("update public.alternativa set correta = false where pergunta_id = @pergunta_id and id <> @id", conn, tx);
+            clearCmd.Parameters.AddWithValue("@pergunta_id", perguntaId.Value);
+            clearCmd.Parameters.AddWithValue("@id", id);
+            await clearCmd.ExecuteNonQueryAsync();
+        }
+
+        await using var cmd = new NpgsqlCommand(@"
+            update public.alternativa
+            set texto = @texto,
+                correta = @correta,
+                ordem = @ordem
+            where id = @id
+            returning id, texto, correta, ordem", conn, tx);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.AddWithValue("@texto", payload.Texto.Trim());
+        cmd.Parameters.AddWithValue("@correta", payload.Correta);
+        cmd.Parameters.AddWithValue("@ordem", payload.Ordem > 0 ? payload.Ordem : 1);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            await tx.RollbackAsync();
+            return Results.NotFound(new { mensagem = "Alternativa nao encontrada." });
+        }
+
+        var updated = new AlternativaDto(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetBoolean(2),
+            reader.GetInt32(3));
+
+        await tx.CommitAsync();
+        return Results.Ok(updated);
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro PUT /api/alternativas/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("UpdateAlternativa");
+
+app.MapDelete("/api/alternativas/{id:long}", async (long id) =>
+{
+    try
+    {
+        await using var cmd = dataSource.CreateCommand("delete from public.alternativa where id = @id");
+        cmd.Parameters.AddWithValue("@id", id);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0 ? Results.NoContent() : Results.NotFound(new { mensagem = "Alternativa nao encontrada." });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro DELETE /api/alternativas/{id}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("DeleteAlternativa");
+
 // Endpoints do professor para gerenciar conteúdo de turma (módulos e aulas).
 app.MapGet("/api/professor/turmas", async (HttpRequest request) =>
 {
@@ -2670,6 +3085,10 @@ record ModuloCreateRequest(string Titulo, string? Descricao, int Ordem, bool? Ac
 record AulaCreateRequest(long? ModuloId, string Titulo, string? Descricao, int DuracaoMinutos, int Ordem, string? VideoUrl, bool? Active);
 record InscricaoCreate(long AlunoId, long TurmaId);
 record AulaProgressUpsertRequest(long AlunoId, long TurmaId, double Percentual, bool Concluida);
+record AlternativaDto(long Id, string Texto, bool Correta, int Ordem);
+record PerguntaDto(long Id, string Enunciado, string Dificuldade, string Status, List<AlternativaDto> Alternativas, DateTime CreatedAt, DateTime UpdatedAt);
+record AlternativaUpsertRequest(long? Id, string Texto, bool Correta, int Ordem);
+record PerguntaUpsertRequest(string Enunciado, string Dificuldade, string Status, List<AlternativaUpsertRequest>? Alternativas);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
