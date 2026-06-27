@@ -1192,6 +1192,208 @@ app.MapDelete("/api/alternativas/{id:long}", async (long id) =>
     }
 }).WithName("DeleteAlternativa");
 
+// Respostas de avaliacao geradas a partir das perguntas cadastradas.
+app.MapGet("/api/avaliacoes/respostas", async (long? alunoId) =>
+{
+    try
+    {
+        var respostas = new Dictionary<long, AvaliacaoRespostaDto>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                ar.id,
+                ar.aluno_id,
+                ar.aluno_nome,
+                ar.total_perguntas,
+                ar.total_corretas,
+                ar.percentual,
+                ar.status,
+                ar.created_at,
+                ari.id as item_id,
+                ari.pergunta_id,
+                ari.alternativa_id,
+                ari.correta
+            from public.avaliacao_resposta ar
+            left join public.avaliacao_resposta_item ari on ari.resposta_id = ar.id
+            where (@aluno_id is null or ar.aluno_id = @aluno_id)
+            order by ar.id desc, ari.id asc");
+        cmd.Parameters.AddWithValue("@aluno_id", NpgsqlTypes.NpgsqlDbType.Bigint, alunoId.HasValue ? alunoId.Value : DBNull.Value);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var respostaId = reader.GetInt64(0);
+            if (!respostas.TryGetValue(respostaId, out var resposta))
+            {
+                resposta = new AvaliacaoRespostaDto(
+                    respostaId,
+                    reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetInt32(3),
+                    reader.GetInt32(4),
+                    reader.GetDecimal(5),
+                    reader.GetString(6),
+                    reader.GetDateTime(7),
+                    new List<AvaliacaoRespostaItemDto>());
+                respostas.Add(respostaId, resposta);
+            }
+
+            if (!reader.IsDBNull(8))
+            {
+                resposta.Itens.Add(new AvaliacaoRespostaItemDto(
+                    reader.GetInt64(8),
+                    reader.GetInt64(9),
+                    reader.GetInt64(10),
+                    reader.GetBoolean(11)));
+            }
+        }
+
+        return Results.Ok(respostas.Values);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabelas public.avaliacao_resposta/public.avaliacao_resposta_item nao encontradas. Execute o script sql/07_create_avaliacao_respostas.sql no Supabase.",
+            title: "Estrutura de banco indisponivel",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/avaliacoes/respostas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListAvaliacaoRespostas");
+
+app.MapPost("/api/avaliacoes/respostas", async (AvaliacaoRespostaCreateRequest? payload) =>
+{
+    if (payload is null || payload.Respostas is null || payload.Respostas.Count == 0)
+    {
+        return Results.BadRequest(new { mensagem = "Informe pelo menos uma resposta." });
+    }
+
+    var respostasRecebidas = payload.Respostas
+        .Where(item => item.PerguntaId > 0 && item.AlternativaId > 0)
+        .ToList();
+
+    if (respostasRecebidas.Count == 0)
+    {
+        return Results.BadRequest(new { mensagem = "Informe perguntas e alternativas validas." });
+    }
+
+    if (respostasRecebidas.Select(item => item.PerguntaId).Distinct().Count() != respostasRecebidas.Count)
+    {
+        return Results.BadRequest(new { mensagem = "Cada pergunta deve ter apenas uma resposta." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        var itens = new List<AvaliacaoRespostaItemDto>();
+
+        foreach (var resposta in respostasRecebidas)
+        {
+            await using var checkCmd = new NpgsqlCommand(@"
+                select a.correta
+                from public.pergunta p
+                inner join public.alternativa a on a.pergunta_id = p.id
+                where p.id = @pergunta_id
+                  and a.id = @alternativa_id
+                  and p.status = 'Ativa'
+                limit 1", conn, tx);
+            checkCmd.Parameters.AddWithValue("@pergunta_id", resposta.PerguntaId);
+            checkCmd.Parameters.AddWithValue("@alternativa_id", resposta.AlternativaId);
+
+            var corretaValue = await checkCmd.ExecuteScalarAsync();
+            if (corretaValue is null)
+            {
+                await tx.RollbackAsync();
+                return Results.BadRequest(new { mensagem = $"Alternativa invalida para a pergunta {resposta.PerguntaId}." });
+            }
+
+            itens.Add(new AvaliacaoRespostaItemDto(
+                0,
+                resposta.PerguntaId,
+                resposta.AlternativaId,
+                Convert.ToBoolean(corretaValue)));
+        }
+
+        var totalPerguntas = itens.Count;
+        var totalCorretas = itens.Count(item => item.Correta);
+        var percentual = totalPerguntas == 0 ? 0m : Math.Round(totalCorretas * 100m / totalPerguntas, 2);
+
+        await using var respostaCmd = new NpgsqlCommand(@"
+            insert into public.avaliacao_resposta (aluno_id, aluno_nome, total_perguntas, total_corretas, percentual, status)
+            values (@aluno_id, @aluno_nome, @total_perguntas, @total_corretas, @percentual, 'Concluida')
+            returning id, aluno_id, aluno_nome, total_perguntas, total_corretas, percentual, status, created_at", conn, tx);
+        respostaCmd.Parameters.AddWithValue("@aluno_id", NpgsqlTypes.NpgsqlDbType.Bigint, payload.AlunoId.HasValue ? payload.AlunoId.Value : DBNull.Value);
+        respostaCmd.Parameters.AddWithValue("@aluno_nome", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.AlunoNome) ? DBNull.Value : payload.AlunoNome.Trim());
+        respostaCmd.Parameters.AddWithValue("@total_perguntas", totalPerguntas);
+        respostaCmd.Parameters.AddWithValue("@total_corretas", totalCorretas);
+        respostaCmd.Parameters.AddWithValue("@percentual", percentual);
+
+        AvaliacaoRespostaDto created;
+        await using (var reader = await respostaCmd.ExecuteReaderAsync())
+        {
+            if (!await reader.ReadAsync())
+            {
+                await tx.RollbackAsync();
+                return Results.Problem("Falha ao registrar avaliacao.");
+            }
+
+            created = new AvaliacaoRespostaDto(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4),
+                reader.GetDecimal(5),
+                reader.GetString(6),
+                reader.GetDateTime(7),
+                new List<AvaliacaoRespostaItemDto>());
+        }
+
+        foreach (var item in itens)
+        {
+            await using var itemCmd = new NpgsqlCommand(@"
+                insert into public.avaliacao_resposta_item (resposta_id, pergunta_id, alternativa_id, correta)
+                values (@resposta_id, @pergunta_id, @alternativa_id, @correta)
+                returning id, pergunta_id, alternativa_id, correta", conn, tx);
+            itemCmd.Parameters.AddWithValue("@resposta_id", created.Id);
+            itemCmd.Parameters.AddWithValue("@pergunta_id", item.PerguntaId);
+            itemCmd.Parameters.AddWithValue("@alternativa_id", item.AlternativaId);
+            itemCmd.Parameters.AddWithValue("@correta", item.Correta);
+
+            await using var itemReader = await itemCmd.ExecuteReaderAsync();
+            if (await itemReader.ReadAsync())
+            {
+                created.Itens.Add(new AvaliacaoRespostaItemDto(
+                    itemReader.GetInt64(0),
+                    itemReader.GetInt64(1),
+                    itemReader.GetInt64(2),
+                    itemReader.GetBoolean(3)));
+            }
+        }
+
+        await tx.CommitAsync();
+        return Results.Created($"/api/avaliacoes/respostas/{created.Id}", created);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        await tx.RollbackAsync();
+        return Results.Problem(
+            detail: "Tabelas de respostas nao encontradas. Execute o script sql/07_create_avaliacao_respostas.sql no Supabase.",
+            title: "Estrutura de banco indisponivel",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro POST /api/avaliacoes/respostas: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreateAvaliacaoResposta");
+
 // Endpoints do professor para gerenciar conteúdo de turma (módulos e aulas).
 app.MapGet("/api/professor/turmas", async (HttpRequest request) =>
 {
@@ -3089,6 +3291,10 @@ record AlternativaDto(long Id, string Texto, bool Correta, int Ordem);
 record PerguntaDto(long Id, string Enunciado, string Dificuldade, string Status, List<AlternativaDto> Alternativas, DateTime CreatedAt, DateTime UpdatedAt);
 record AlternativaUpsertRequest(long? Id, string Texto, bool Correta, int Ordem);
 record PerguntaUpsertRequest(string Enunciado, string Dificuldade, string Status, List<AlternativaUpsertRequest>? Alternativas);
+record AvaliacaoRespostaItemDto(long Id, long PerguntaId, long AlternativaId, bool Correta);
+record AvaliacaoRespostaDto(long Id, long? AlunoId, string? AlunoNome, int TotalPerguntas, int TotalCorretas, decimal Percentual, string Status, DateTime CreatedAt, List<AvaliacaoRespostaItemDto> Itens);
+record AvaliacaoRespostaItemRequest(long PerguntaId, long AlternativaId);
+record AvaliacaoRespostaCreateRequest(long? AlunoId, string? AlunoNome, List<AvaliacaoRespostaItemRequest>? Respostas);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
