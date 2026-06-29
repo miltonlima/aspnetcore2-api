@@ -16,7 +16,7 @@ create table if not exists public.access_log (
   referrer text null,
   status_code integer null,
   metadata jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
+  created_at timestamp not null default timezone('America/Sao_Paulo', now()),
 
   constraint access_log_action_check
     check (length(trim(action)) > 0),
@@ -27,6 +27,13 @@ create table if not exists public.access_log (
   constraint access_log_status_code_check
     check (status_code is null or (status_code >= 100 and status_code <= 599))
 );
+
+alter table public.access_log
+  alter column created_at type timestamp
+  using created_at at time zone 'America/Sao_Paulo';
+
+alter table public.access_log
+  alter column created_at set default timezone('America/Sao_Paulo', now());
 
 create index if not exists access_log_user_id_idx
   on public.access_log (user_id);
