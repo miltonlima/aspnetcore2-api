@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Text.Json;
 using Npgsql;
 
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
@@ -2368,6 +2369,105 @@ app.MapPost("/api/inscricoes", async (InscricaoCreate? payload) =>
     }
 }).WithName("CreateInscricao");
 
+// Registra logs de acesso do frontend em public.access_log.
+app.MapPost("/api/access-logs", async (HttpRequest request, AccessLogCreateRequest? payload) =>
+{
+    if (payload is null || string.IsNullOrWhiteSpace(payload.PagePath) || string.IsNullOrWhiteSpace(payload.Action))
+    {
+        return Results.BadRequest(new { mensagem = "Pagina acessada e acao sao obrigatorias." });
+    }
+
+    try
+    {
+        var forwardedFor = request.Headers["x-forwarded-for"].FirstOrDefault();
+        var ipAddress = !string.IsNullOrWhiteSpace(forwardedFor)
+            ? forwardedFor.Split(',')[0].Trim()
+            : request.HttpContext.Connection.RemoteIpAddress?.ToString();
+
+        var userAgent = request.Headers.UserAgent.ToString();
+        var referrer = request.Headers.Referer.ToString();
+        var metadata = JsonSerializer.Serialize(payload.Metadata ?? new Dictionary<string, object?>());
+
+        await using var cmd = dataSource.CreateCommand(@"
+            insert into public.access_log (
+                user_id,
+                user_email,
+                user_name,
+                user_type,
+                session_id,
+                page_path,
+                page_title,
+                action,
+                http_method,
+                ip_address,
+                user_agent,
+                referrer,
+                status_code,
+                metadata
+            )
+            values (
+                @user_id,
+                @user_email,
+                @user_name,
+                @user_type,
+                @session_id,
+                @page_path,
+                @page_title,
+                @action,
+                @http_method,
+                nullif(@ip_address, '')::inet,
+                @user_agent,
+                @referrer,
+                @status_code,
+                @metadata::jsonb
+            )
+            returning id, created_at");
+
+        cmd.Parameters.AddWithValue("@user_id", NpgsqlTypes.NpgsqlDbType.Bigint, payload.UserId.HasValue ? payload.UserId.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("@user_email", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.UserEmail) ? DBNull.Value : payload.UserEmail.Trim());
+        cmd.Parameters.AddWithValue("@user_name", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.UserName) ? DBNull.Value : payload.UserName.Trim());
+        cmd.Parameters.AddWithValue("@user_type", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.UserType) ? DBNull.Value : payload.UserType.Trim());
+        cmd.Parameters.AddWithValue("@session_id", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.SessionId) ? DBNull.Value : payload.SessionId.Trim());
+        cmd.Parameters.AddWithValue("@page_path", payload.PagePath.Trim());
+        cmd.Parameters.AddWithValue("@page_title", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.PageTitle) ? DBNull.Value : payload.PageTitle.Trim());
+        cmd.Parameters.AddWithValue("@action", payload.Action.Trim());
+        cmd.Parameters.AddWithValue("@http_method", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.HttpMethod) ? DBNull.Value : payload.HttpMethod.Trim().ToUpperInvariant());
+        cmd.Parameters.AddWithValue("@ip_address", ipAddress ?? string.Empty);
+        cmd.Parameters.AddWithValue("@user_agent", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(userAgent) ? DBNull.Value : userAgent);
+        cmd.Parameters.AddWithValue("@referrer", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(payload.Referrer) ? (string.IsNullOrWhiteSpace(referrer) ? DBNull.Value : referrer) : payload.Referrer.Trim());
+        cmd.Parameters.AddWithValue("@status_code", NpgsqlTypes.NpgsqlDbType.Integer, payload.StatusCode.HasValue ? payload.StatusCode.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("@metadata", metadata);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return Results.Problem("Falha ao registrar log de acesso.");
+        }
+
+        return Results.Created($"/api/access-logs/{reader.GetInt64(0)}", new
+        {
+            id = reader.GetInt64(0),
+            createdAt = reader.GetDateTime(1)
+        });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.access_log nao encontrada. Execute o script sql/09_create_access_logs.sql no Supabase.",
+            title: "Estrutura de logs ausente",
+            statusCode: 500);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.InvalidTextRepresentation)
+    {
+        return Results.BadRequest(new { mensagem = "IP informado em formato invalido." });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro POST /api/access-logs: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CreateAccessLog");
+
 // Autenticação básica: busca usuário no Supabase (tabela public.users) e compara senha.
 // OBS: Esta comparação é direta; se armazenar hash (recomendado), adapte para verificar o hash (ex.: BCrypt).
 app.MapPost("/login", async (LoginRequest? login) =>
@@ -3295,6 +3395,7 @@ record AvaliacaoRespostaItemDto(long Id, long PerguntaId, long AlternativaId, bo
 record AvaliacaoRespostaDto(long Id, long? AlunoId, string? AlunoNome, int TotalPerguntas, int TotalCorretas, decimal Percentual, string Status, DateTime CreatedAt, List<AvaliacaoRespostaItemDto> Itens);
 record AvaliacaoRespostaItemRequest(long PerguntaId, long AlternativaId);
 record AvaliacaoRespostaCreateRequest(long? AlunoId, string? AlunoNome, List<AvaliacaoRespostaItemRequest>? Respostas);
+record AccessLogCreateRequest(long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? Referrer, int? StatusCode, Dictionary<string, object?>? Metadata);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
