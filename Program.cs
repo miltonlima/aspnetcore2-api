@@ -2384,7 +2384,10 @@ app.MapPost("/api/access-logs", async (HttpRequest request, AccessLogCreateReque
             ? forwardedFor.Split(',')[0].Trim()
             : request.HttpContext.Connection.RemoteIpAddress?.ToString();
 
-        var userAgent = request.Headers.UserAgent.ToString();
+        var headerUserAgent = request.Headers.UserAgent.ToString();
+        var userAgent = string.IsNullOrWhiteSpace(payload.UserAgent)
+            ? headerUserAgent
+            : payload.UserAgent.Trim();
         var referrer = request.Headers.Referer.ToString();
         var metadata = JsonSerializer.Serialize(payload.Metadata ?? new Dictionary<string, object?>());
 
@@ -3395,7 +3398,7 @@ record AvaliacaoRespostaItemDto(long Id, long PerguntaId, long AlternativaId, bo
 record AvaliacaoRespostaDto(long Id, long? AlunoId, string? AlunoNome, int TotalPerguntas, int TotalCorretas, decimal Percentual, string Status, DateTime CreatedAt, List<AvaliacaoRespostaItemDto> Itens);
 record AvaliacaoRespostaItemRequest(long PerguntaId, long AlternativaId);
 record AvaliacaoRespostaCreateRequest(long? AlunoId, string? AlunoNome, List<AvaliacaoRespostaItemRequest>? Respostas);
-record AccessLogCreateRequest(long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? Referrer, int? StatusCode, Dictionary<string, object?>? Metadata);
+record AccessLogCreateRequest(long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? Referrer, string? UserAgent, int? StatusCode, Dictionary<string, object?>? Metadata);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
