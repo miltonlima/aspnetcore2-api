@@ -610,7 +610,13 @@ app.MapGet("/api/turmas", async () =>
                 m.course_name,
                 t.data_inicio,
                 t.data_fim,
-                coalesce(t.active, true) as active
+                coalesce(t.active, true) as active,
+                t.inicio_inscricao,
+                t.fim_inscricao,
+                t.img_curso,
+                t.descricao,
+                t.classificacao,
+                coalesce(t.preco, 0) as preco
             from public.turma t
             inner join public.modalidade m on m.id = t.modalidade_id
             order by t.id");
@@ -624,7 +630,13 @@ app.MapGet("/api/turmas", async () =>
                 reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetDateTime(4),
                 reader.IsDBNull(5) ? null : reader.GetDateTime(5),
-                reader.GetBoolean(6)
+                reader.GetBoolean(6),
+                reader.IsDBNull(7) ? null : reader.GetDateTime(7),
+                reader.IsDBNull(8) ? null : reader.GetDateTime(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.GetDecimal(12)
             ));
         }
         return Results.Ok(items);
@@ -648,6 +660,16 @@ app.MapPost("/api/turmas", async (TurmaCreate payload) =>
         return Results.BadRequest(new { mensagem = "Data fim não pode ser menor que data início." });
     }
 
+    if (payload.InicioInscricao.HasValue && payload.FimInscricao.HasValue && payload.FimInscricao < payload.InicioInscricao)
+    {
+        return Results.BadRequest(new { mensagem = "Fim da inscricao nao pode ser menor que inicio da inscricao." });
+    }
+
+    if (payload.Preco.HasValue && payload.Preco.Value < 0)
+    {
+        return Results.BadRequest(new { mensagem = "Preco nao pode ser negativo." });
+    }
+
     try
     {
         await using var modalidadeCmd = dataSource.CreateCommand("select course_name from public.modalidade where id = @id");
@@ -659,14 +681,44 @@ app.MapPost("/api/turmas", async (TurmaCreate payload) =>
         }
 
         await using var cmd = dataSource.CreateCommand(@"
-            insert into public.turma (nome_turma, modalidade_id, data_inicio, data_fim, active)
-            values (@nome_turma, @modalidade_id, @data_inicio, @data_fim, @active)
-            returning id, nome_turma, modalidade_id, data_inicio, data_fim, coalesce(active, true)");
+            insert into public.turma (
+                nome_turma,
+                modalidade_id,
+                data_inicio,
+                data_fim,
+                active,
+                inicio_inscricao,
+                fim_inscricao,
+                img_curso,
+                descricao,
+                classificacao,
+                preco
+            )
+            values (
+                @nome_turma,
+                @modalidade_id,
+                @data_inicio,
+                @data_fim,
+                @active,
+                @inicio_inscricao,
+                @fim_inscricao,
+                @img_curso,
+                @descricao,
+                @classificacao,
+                @preco
+            )
+            returning id, nome_turma, modalidade_id, data_inicio, data_fim, coalesce(active, true), inicio_inscricao, fim_inscricao, img_curso, descricao, classificacao, coalesce(preco, 0)");
         cmd.Parameters.AddWithValue("@nome_turma", payload.NomeTurma.Trim());
         cmd.Parameters.AddWithValue("@modalidade_id", payload.ModalidadeId);
         cmd.Parameters.AddWithValue("@data_inicio", payload.DataInicio.HasValue ? payload.DataInicio.Value : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@data_fim", payload.DataFim.HasValue ? payload.DataFim.Value : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+        cmd.Parameters.AddWithValue("@inicio_inscricao", payload.InicioInscricao.HasValue ? payload.InicioInscricao.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@fim_inscricao", payload.FimInscricao.HasValue ? payload.FimInscricao.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@img_curso", string.IsNullOrWhiteSpace(payload.ImgCurso) ? DBNull.Value : payload.ImgCurso.Trim());
+        cmd.Parameters.AddWithValue("@descricao", string.IsNullOrWhiteSpace(payload.Descricao) ? DBNull.Value : payload.Descricao.Trim());
+        cmd.Parameters.AddWithValue("@classificacao", string.IsNullOrWhiteSpace(payload.Classificacao) ? DBNull.Value : payload.Classificacao.Trim());
+        cmd.Parameters.AddWithValue("@preco", payload.Preco ?? 0m);
 
         await using var reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
@@ -681,7 +733,13 @@ app.MapPost("/api/turmas", async (TurmaCreate payload) =>
             modalidadeNomeObj.ToString() ?? string.Empty,
             reader.IsDBNull(3) ? null : reader.GetDateTime(3),
             reader.IsDBNull(4) ? null : reader.GetDateTime(4),
-            reader.GetBoolean(5)
+            reader.GetBoolean(5),
+            reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+            reader.IsDBNull(7) ? null : reader.GetDateTime(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.GetDecimal(11)
         );
         return Results.Created($"/api/turmas/{created.Id}", created);
     }
@@ -704,6 +762,16 @@ app.MapPut("/api/turmas/{id:long}", async (long id, TurmaCreate payload) =>
         return Results.BadRequest(new { mensagem = "Data fim não pode ser menor que data início." });
     }
 
+    if (payload.InicioInscricao.HasValue && payload.FimInscricao.HasValue && payload.FimInscricao < payload.InicioInscricao)
+    {
+        return Results.BadRequest(new { mensagem = "Fim da inscrição não pode ser menor que início da inscrição." });
+    }
+
+    if (payload.Preco.HasValue && payload.Preco.Value < 0)
+    {
+        return Results.BadRequest(new { mensagem = "Preço não pode ser negativo." });
+    }
+
     try
     {
         await using var modalidadeCmd = dataSource.CreateCommand("select course_name from public.modalidade where id = @id");
@@ -721,15 +789,27 @@ app.MapPut("/api/turmas/{id:long}", async (long id, TurmaCreate payload) =>
                 modalidade_id = @modalidade_id,
                 data_inicio = @data_inicio,
                 data_fim = @data_fim,
-                active = @active
+                active = @active,
+                inicio_inscricao = @inicio_inscricao,
+                fim_inscricao = @fim_inscricao,
+                img_curso = @img_curso,
+                descricao = @descricao,
+                classificacao = @classificacao,
+                preco = @preco
             where id = @id
-            returning id, nome_turma, modalidade_id, data_inicio, data_fim, coalesce(active, true)");
+            returning id, nome_turma, modalidade_id, data_inicio, data_fim, coalesce(active, true), inicio_inscricao, fim_inscricao, img_curso, descricao, classificacao, coalesce(preco, 0)");
         cmd.Parameters.AddWithValue("@id", id);
         cmd.Parameters.AddWithValue("@nome_turma", payload.NomeTurma.Trim());
         cmd.Parameters.AddWithValue("@modalidade_id", payload.ModalidadeId);
         cmd.Parameters.AddWithValue("@data_inicio", payload.DataInicio.HasValue ? payload.DataInicio.Value : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@data_fim", payload.DataFim.HasValue ? payload.DataFim.Value : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@active", payload.Active ?? true);
+        cmd.Parameters.AddWithValue("@inicio_inscricao", payload.InicioInscricao.HasValue ? payload.InicioInscricao.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@fim_inscricao", payload.FimInscricao.HasValue ? payload.FimInscricao.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@img_curso", string.IsNullOrWhiteSpace(payload.ImgCurso) ? DBNull.Value : payload.ImgCurso.Trim());
+        cmd.Parameters.AddWithValue("@descricao", string.IsNullOrWhiteSpace(payload.Descricao) ? DBNull.Value : payload.Descricao.Trim());
+        cmd.Parameters.AddWithValue("@classificacao", string.IsNullOrWhiteSpace(payload.Classificacao) ? DBNull.Value : payload.Classificacao.Trim());
+        cmd.Parameters.AddWithValue("@preco", payload.Preco ?? 0m);
 
         await using var reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
@@ -744,7 +824,13 @@ app.MapPut("/api/turmas/{id:long}", async (long id, TurmaCreate payload) =>
             modalidadeNomeObj.ToString() ?? string.Empty,
             reader.IsDBNull(3) ? null : reader.GetDateTime(3),
             reader.IsDBNull(4) ? null : reader.GetDateTime(4),
-            reader.GetBoolean(5)
+            reader.GetBoolean(5),
+            reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+            reader.IsDBNull(7) ? null : reader.GetDateTime(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.GetDecimal(11)
         );
         return Results.Ok(updated);
     }
@@ -1415,7 +1501,13 @@ app.MapGet("/api/professor/turmas", async (HttpRequest request) =>
                 m.course_name,
                 t.data_inicio,
                 t.data_fim,
-                coalesce(t.active, true) as active
+                coalesce(t.active, true) as active,
+                t.inicio_inscricao,
+                t.fim_inscricao,
+                t.img_curso,
+                t.descricao,
+                t.classificacao,
+                coalesce(t.preco, 0) as preco
             from public.turma t
             inner join public.modalidade m on m.id = t.modalidade_id
             order by t.nome_turma");
@@ -1429,7 +1521,13 @@ app.MapGet("/api/professor/turmas", async (HttpRequest request) =>
                 reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetDateTime(4),
                 reader.IsDBNull(5) ? null : reader.GetDateTime(5),
-                reader.GetBoolean(6)
+                reader.GetBoolean(6),
+                reader.IsDBNull(7) ? null : reader.GetDateTime(7),
+                reader.IsDBNull(8) ? null : reader.GetDateTime(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.GetDecimal(12)
             ));
         }
         return Results.Ok(items);
@@ -3384,8 +3482,8 @@ record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
 record Modalidade(long Id, string CourseName, DateTime CreatedAt);
 record ModalidadeCreate(string CourseName);
-record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active);
-record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active);
+record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active, DateTime? InicioInscricao, DateTime? FimInscricao, string? ImgCurso, string? Descricao, string? Classificacao, decimal Preco);
+record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active, DateTime? InicioInscricao, DateTime? FimInscricao, string? ImgCurso, string? Descricao, string? Classificacao, decimal? Preco);
 record ModuloCreateRequest(string Titulo, string? Descricao, int Ordem, bool? Active);
 record AulaCreateRequest(long? ModuloId, string Titulo, string? Descricao, int DuracaoMinutos, int Ordem, string? VideoUrl, bool? Active);
 record InscricaoCreate(long AlunoId, long TurmaId);
