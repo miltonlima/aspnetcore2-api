@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Npgsql;
 
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
@@ -3482,8 +3483,32 @@ record Instrument(int Id, string Name);
 record InstrumentCreate(string Name);
 record Modalidade(long Id, string CourseName, DateTime CreatedAt);
 record ModalidadeCreate(string CourseName);
-record Turma(long Id, string NomeTurma, long ModalidadeId, string ModalidadeNome, DateTime? DataInicio, DateTime? DataFim, bool Active, DateTime? InicioInscricao, DateTime? FimInscricao, string? ImgCurso, string? Descricao, string? Classificacao, decimal Preco);
-record TurmaCreate(string NomeTurma, long ModalidadeId, DateTime? DataInicio, DateTime? DataFim, bool? Active, DateTime? InicioInscricao, DateTime? FimInscricao, string? ImgCurso, string? Descricao, string? Classificacao, decimal? Preco);
+record Turma(
+    [property: JsonPropertyName("id")] long Id,
+    [property: JsonPropertyName("nomeTurma")] string NomeTurma,
+    [property: JsonPropertyName("modalidadeId")] long ModalidadeId,
+    [property: JsonPropertyName("modalidadeNome")] string ModalidadeNome,
+    [property: JsonPropertyName("dataInicio")] DateTime? DataInicio,
+    [property: JsonPropertyName("dataFim")] DateTime? DataFim,
+    [property: JsonPropertyName("active")] bool Active,
+    [property: JsonPropertyName("inicioInscricao")] DateTime? InicioInscricao,
+    [property: JsonPropertyName("fimInscricao")] DateTime? FimInscricao,
+    [property: JsonPropertyName("imgCurso")] string? ImgCurso,
+    [property: JsonPropertyName("descricao")] string? Descricao,
+    [property: JsonPropertyName("classificacao")] string? Classificacao,
+    [property: JsonPropertyName("preco")] decimal Preco);
+record TurmaCreate(
+    [property: JsonPropertyName("nomeTurma")] string NomeTurma,
+    [property: JsonPropertyName("modalidadeId")] long ModalidadeId,
+    [property: JsonPropertyName("dataInicio")] DateTime? DataInicio,
+    [property: JsonPropertyName("dataFim")] DateTime? DataFim,
+    [property: JsonPropertyName("active")] bool? Active,
+    [property: JsonPropertyName("inicioInscricao")] DateTime? InicioInscricao,
+    [property: JsonPropertyName("fimInscricao")] DateTime? FimInscricao,
+    [property: JsonPropertyName("imgCurso")] string? ImgCurso,
+    [property: JsonPropertyName("descricao")] string? Descricao,
+    [property: JsonPropertyName("classificacao")] string? Classificacao,
+    [property: JsonPropertyName("preco")] decimal? Preco);
 record ModuloCreateRequest(string Titulo, string? Descricao, int Ordem, bool? Active);
 record AulaCreateRequest(long? ModuloId, string Titulo, string? Descricao, int DuracaoMinutos, int Ordem, string? VideoUrl, bool? Active);
 record InscricaoCreate(long AlunoId, long TurmaId);
