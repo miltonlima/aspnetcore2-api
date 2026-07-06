@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>aspnetcore2_api</RootNamespace>
     <UserSecretsId>1c0f6226-2413-446d-9a60-43be9f5bf1ad</UserSecretsId>
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

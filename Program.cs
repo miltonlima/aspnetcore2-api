@@ -2226,6 +2226,7 @@ app.MapGet("/api/turmas/{turmaId:long}/aulas", async (long turmaId, long alunoId
                 a.turma_id,
                 a.modulo_id,
                 coalesce(md.titulo, 'Geral') as modulo_titulo,
+                md.ordem as modulo_ordem,
                 a.titulo,
                 a.descricao,
                 a.duracao_minutos,
@@ -2241,7 +2242,7 @@ app.MapGet("/api/turmas/{turmaId:long}/aulas", async (long turmaId, long alunoId
                 and p.aluno_id = @aluno_id
             where a.turma_id = @turma_id
               and coalesce(a.active, true) = true
-            order by a.ordem asc, a.id asc");
+            order by coalesce(md.ordem, 2147483647) asc, a.ordem asc, a.id asc");
         cmd.Parameters.AddWithValue("@aluno_id", alunoId);
         cmd.Parameters.AddWithValue("@turma_id", turmaId);
 
@@ -2256,6 +2257,7 @@ app.MapGet("/api/turmas/{turmaId:long}/aulas", async (long turmaId, long alunoId
                 turmaId = reader.GetInt64(reader.GetOrdinal("turma_id")),
                 moduloId = reader.IsDBNull(reader.GetOrdinal("modulo_id")) ? (long?)null : reader.GetInt64(reader.GetOrdinal("modulo_id")),
                 moduloTitulo = reader.GetString(reader.GetOrdinal("modulo_titulo")),
+                moduloOrdem = reader.IsDBNull(reader.GetOrdinal("modulo_ordem")) ? (int?)null : reader.GetInt32(reader.GetOrdinal("modulo_ordem")),
                 titulo = reader.GetString(reader.GetOrdinal("titulo")),
                 descricao = reader.IsDBNull(reader.GetOrdinal("descricao")) ? string.Empty : reader.GetString(reader.GetOrdinal("descricao")),
                 duracaoMinutos = reader.GetInt32(reader.GetOrdinal("duracao_minutos")),
