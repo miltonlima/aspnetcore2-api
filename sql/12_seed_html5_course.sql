@@ -1,6 +1,6 @@
 -- Seed da modalidade "Desenvolvimento Web" e do curso "HTML 5"
 -- Supabase/PostgreSQL
--- Cria 3 modulos e 30 aulas. Cada aula recebe conteudo teorico com mais de 20 linhas.
+-- Cria 3 modulos e 30 aulas. Cada aula recebe conteudo teorico objetivo com 5 linhas.
 
 begin;
 
@@ -125,6 +125,38 @@ aulas(modulo_ordem, aula_ordem, titulo, foco, pratica, exemplo, cuidado, resulta
     (3, 8, 'Preparacao para CSS e JavaScript', 'como classes, ids e estrutura limpa facilitam evolucao', 'preparar marcacao para receber estilos e interacao', 'um botao com classe clara e uma secao pronta para comportamento dinamico', 'usar ids para tudo ou nomes de classes que descrevem apenas cor e tamanho', 'escrever HTML que possa evoluir sem reestruturacao completa', 15),
     (3, 9, 'Publicacao de paginas estaticas', 'conceitos de hospedagem, arquivo inicial e caminho publico', 'organizar uma pagina para publicacao simples', 'um projeto pronto para hospedagem com index.html na raiz', 'usar caminhos locais do computador que quebram quando o site e publicado', 'preparar arquivos para funcionar fora do ambiente de desenvolvimento', 15),
     (3, 10, 'Projeto final em HTML 5', 'a construcao de uma pagina completa com semantica, acessibilidade e organizacao', 'entregar uma pagina final revisada e validada', 'uma pagina de portifolio ou curso com cabecalho, conteudo, formulario e rodape', 'entregar apenas trechos soltos sem fluxo de leitura e sem validacao', 'concluir uma pagina HTML 5 consistente, organizada e pronta para evoluir', 22)
+),
+aulas_payload as (
+  select
+    c.id as turma_id,
+    tm.id as modulo_id,
+    a.titulo,
+    a.aula_ordem,
+    a.duracao_minutos,
+  array_to_string(array[
+    format('Objetivo: compreender %s.', a.foco),
+    format('Aplicacao em HTML 5: %s.', a.exemplo),
+    format('Cuidado importante: %s.', a.cuidado),
+    format('Pratica da aula: %s.', a.pratica),
+    format('Ao concluir, voce deve conseguir %s.', a.resultado)
+  ], E'\n') as descricao
+  from curso c
+  join public.turma_modulo tm on tm.turma_id = c.id
+  join aulas a on a.modulo_ordem = tm.ordem
+),
+aulas_atualizadas as (
+  update public.turma_aula ta
+  set
+    titulo = ap.titulo,
+    descricao = ap.descricao,
+    duracao_minutos = ap.duracao_minutos,
+    video_url = null,
+    active = true
+  from aulas_payload ap
+  where ta.turma_id = ap.turma_id
+    and ta.modulo_id = ap.modulo_id
+    and ta.ordem = ap.aula_ordem
+  returning ta.id
 )
 insert into public.turma_aula (
   turma_id,
@@ -137,148 +169,21 @@ insert into public.turma_aula (
   active
 )
 select
-  c.id,
-  tm.id,
-  a.titulo,
-  array_to_string(array[
-    format('Aula: %s.', a.titulo),
-    format('Objetivo da aula: compreender %s.', a.foco),
-    case a.modulo_ordem
-      when 1 then 'Neste modulo, a aula fortalece a base de estrutura: primeiro o documento, depois os elementos, depois a pagina completa.'
-      when 2 then 'Neste modulo, a aula aproxima o HTML de telas reais, com semantica, midias, tabelas e formularios.'
-      else 'Neste modulo, a aula trata da qualidade final do projeto: acessibilidade, SEO, validacao, organizacao e publicacao.'
-    end,
-    case a.modulo_ordem
-      when 1 then 'A pergunta guia e: esta marcacao deixa claro o que cada parte do conteudo representa?'
-      when 2 then 'A pergunta guia e: este elemento ajuda o usuario a entender, consumir ou preencher melhor a interface?'
-      else 'A pergunta guia e: esta pagina seria compreensivel, acessivel e facil de publicar fora do meu computador?'
-    end,
-    format('Contexto pratico: %s.', a.exemplo),
-    format('Ponto de atencao: %s.', a.cuidado),
-    case a.aula_ordem
-      when 1 then 'Comece observando o problema geral da aula e identifique onde ele aparece em sites que voce usa no dia a dia.'
-      when 2 then 'Antes de codificar, desenhe mentalmente a estrutura que sera criada e separe configuracao, conteudo e interacao.'
-      when 3 then 'Leia cada elemento com calma e perceba quais informacoes sao obrigatorias para que ele tenha sentido.'
-      when 4 then 'Priorize a ordem de leitura, pois titulos e textos sao o caminho principal para entender a pagina.'
-      when 5 then 'Pense no fluxo de navegacao: cada acao deve indicar para onde o usuario sera levado.'
-      when 6 then 'Avalie se o recurso visual ou de arquivo esta realmente ajudando o conteudo a ficar mais claro.'
-      when 7 then 'Organize informacoes repetidas em grupos, evitando misturar lista, paragrafo e tabela sem necessidade.'
-      when 8 then 'Use agrupamentos para melhorar manutencao, mas sem transformar todo o documento em blocos genericos.'
-      when 9 then 'Revise o codigo como se outra pessoa fosse continuar o projeto depois de voce.'
-      else 'Una os conhecimentos anteriores e procure entregar uma pagina que funcione como um pequeno projeto completo.'
-    end,
-    case a.aula_ordem
-      when 1 then 'O primeiro passo pratico e abrir um arquivo simples e reconhecer a responsabilidade de cada camada da web.'
-      when 2 then 'O segundo passo e montar a estrutura minima e conferir se o navegador interpreta o documento corretamente.'
-      when 3 then 'O terceiro passo e testar pequenas variacoes de atributos para entender o efeito de cada um.'
-      when 4 then 'O quarto passo e transformar texto solto em uma hierarquia compreensivel.'
-      when 5 then 'O quinto passo e criar caminhos entre secoes, paginas ou recursos externos.'
-      when 6 then 'O sexto passo e validar se caminhos de arquivo, formatos e descricoes fazem sentido.'
-      when 7 then 'O setimo passo e escolher a estrutura de lista ou agrupamento que melhor representa os dados.'
-      when 8 then 'O oitavo passo e separar blocos apenas quando isso simplificar a leitura do codigo.'
-      when 9 then 'O nono passo e limpar excesso de comentarios e melhorar a indentacao.'
-      else 'O decimo passo e revisar o conjunto e corrigir incoerencias antes de considerar a aula concluida.'
-    end,
-    case a.modulo_ordem
-      when 1 then 'Ao praticar, mantenha o foco em tags essenciais, hierarquia e caminhos de arquivo.'
-      when 2 then 'Ao praticar, mantenha o foco em significado, controle do usuario e organizacao dos campos.'
-      else 'Ao praticar, mantenha o foco em revisao, compatibilidade, clareza e preparo para publicacao.'
-    end,
-    case a.modulo_ordem
-      when 1 then 'Uma pagina bem estruturada neste ponto ainda pode ser simples visualmente, mas ja deve ser coerente no codigo.'
-      when 2 then 'Uma pagina bem construida neste ponto deve favorecer leitura, preenchimento e interpretacao por ferramentas.'
-      else 'Uma pagina bem finalizada neste ponto deve ser validada, acessivel e preparada para evoluir com outras tecnologias.'
-    end,
-    case a.aula_ordem
-      when 1 then 'Compare a pagina pronta com um exemplo real e identifique quais partes poderiam receber tags mais especificas.'
-      when 2 then 'Confira se a divisao do arquivo evita confusao entre metadados e conteudo visivel.'
-      when 3 then 'Verifique se os atributos usados possuem nomes, valores e finalidades compreensiveis.'
-      when 4 then 'Confira se existe apenas um titulo principal e se os subtitulos seguem uma ordem natural.'
-      when 5 then 'Teste todos os links e veja se o texto de cada um antecipa corretamente o destino.'
-      when 6 then 'Abra a pagina sem uma imagem carregada e veja se o texto alternativo ainda comunica a informacao.'
-      when 7 then 'Troque temporariamente a ordem dos itens e perceba se isso muda ou nao o sentido da lista.'
-      when 8 then 'Substitua um bloco generico por uma tag semantica quando houver uma funcao clara.'
-      when 9 then 'Remova comentarios que nao ajudam na decisao tecnica e mantenha apenas os que orientam a leitura.'
-      else 'Revise o projeto completo usando o navegador e o editor lado a lado.'
-    end,
-    case a.modulo_ordem
-      when 1 then 'Checklist do modulo: documento valido, conteudo bem dividido, nomes claros e relacao correta entre arquivos.'
-      when 2 then 'Checklist do modulo: semantica adequada, controles compreensiveis, midias com fallback e formularios bem rotulados.'
-      else 'Checklist do modulo: metadados revisados, navegacao por teclado testada, HTML validado e estrutura pronta para hospedagem.'
-    end,
-    case a.aula_ordem
-      when 1 then 'Pergunta de revisao: qual problema esta aula resolve antes de qualquer preocupacao com aparencia?'
-      when 2 then 'Pergunta de revisao: o que precisa ficar dentro da configuracao do documento e o que pertence ao conteudo?'
-      when 3 then 'Pergunta de revisao: qual atributo muda o comportamento do elemento e qual apenas complementa informacao?'
-      when 4 then 'Pergunta de revisao: a hierarquia de titulos permite entender a pagina apenas olhando o sumario?'
-      when 5 then 'Pergunta de revisao: os links ajudam o usuario a prever o destino antes do clique?'
-      when 6 then 'Pergunta de revisao: se o arquivo externo falhar, o conteudo principal continua compreensivel?'
-      when 7 then 'Pergunta de revisao: a ordem dos itens altera o significado ou apenas organiza visualmente?'
-      when 8 then 'Pergunta de revisao: este agrupamento melhora a estrutura ou apenas esconde falta de semantica?'
-      when 9 then 'Pergunta de revisao: o codigo explica sua intencao pela propria organizacao?'
-      else 'Pergunta de revisao: o conjunto final representa uma pagina completa e coerente?'
-    end,
-    case a.modulo_ordem
-      when 1 then 'Erro comum do modulo: escrever HTML pensando apenas no resultado visual imediato.'
-      when 2 then 'Erro comum do modulo: adicionar recursos de interface sem cuidar de rotulos, ordem e significado.'
-      else 'Erro comum do modulo: publicar ou finalizar sem testar leitura, caminhos, metadados e validacao.'
-    end,
-    case a.aula_ordem
-      when 1 then 'Dica pratica: explique o conceito com suas palavras antes de abrir o editor.'
-      when 2 then 'Dica pratica: use um arquivo pequeno para testar a estrutura antes de expandir a pagina.'
-      when 3 then 'Dica pratica: altere um atributo por vez e observe o impacto no navegador.'
-      when 4 then 'Dica pratica: leia apenas os titulos e veja se eles contam a historia da pagina.'
-      when 5 then 'Dica pratica: passe o mouse e use o teclado para testar se a navegacao e clara.'
-      when 6 then 'Dica pratica: mantenha arquivos em pastas previsiveis e confira caminhos relativos.'
-      when 7 then 'Dica pratica: escolha lista quando os itens pertencem ao mesmo grupo de informacao.'
-      when 8 then 'Dica pratica: use elementos genericos como apoio, nao como substitutos de toda semantica.'
-      when 9 then 'Dica pratica: prefira comentarios curtos que expliquem decisoes, nao linhas obvias.'
-      else 'Dica pratica: revise como usuario e como desenvolvedor antes de concluir.'
-    end,
-    case a.modulo_ordem
-      when 1 then 'Conexao com a proxima etapa: uma estrutura limpa facilita aplicar estilos sem reorganizar tudo.'
-      when 2 then 'Conexao com a proxima etapa: interfaces bem marcadas ficam mais faceis de validar, estilizar e automatizar.'
-      else 'Conexao com a proxima etapa: um projeto validado e organizado pode receber CSS, JavaScript e publicacao com menos retrabalho.'
-    end,
-    case a.aula_ordem
-      when 1 then 'Mini-entrega: uma explicacao curta do papel do recurso estudado dentro de uma pagina.'
-      when 2 then 'Mini-entrega: um arquivo inicial que possa servir de modelo para novas paginas.'
-      when 3 then 'Mini-entrega: exemplos de elementos com atributos corretos e finalidade clara.'
-      when 4 then 'Mini-entrega: um bloco textual com titulos e paragrafos bem encadeados.'
-      when 5 then 'Mini-entrega: um pequeno conjunto de links internos ou externos funcionando.'
-      when 6 then 'Mini-entrega: uma imagem ou arquivo externo referenciado corretamente.'
-      when 7 then 'Mini-entrega: uma lista adequada ao tipo de informacao apresentada.'
-      when 8 then 'Mini-entrega: uma estrutura de blocos simples sem excesso de elementos genericos.'
-      when 9 then 'Mini-entrega: um trecho de codigo revisado e mais legivel que a primeira versao.'
-      else 'Mini-entrega: uma pagina consolidada com os principais pontos da sequencia.'
-    end,
-    case a.modulo_ordem
-      when 1 then 'Sinal de qualidade: mesmo sem CSS, a pagina deve revelar sua organizacao e seu objetivo.'
-      when 2 then 'Sinal de qualidade: os elementos devem orientar leitura, preenchimento e consumo de midia sem ambiguidade.'
-      else 'Sinal de qualidade: a pagina deve resistir a revisao tecnica sem depender de explicacoes externas.'
-    end,
-    format('Exercicio recomendado: %s.', a.pratica),
-    format('Resultado esperado: %s.', a.resultado),
-    case a.modulo_ordem
-      when 1 then 'Criterio de conclusao: a estrutura deve abrir corretamente no navegador e demonstrar dominio dos elementos basicos.'
-      when 2 then 'Criterio de conclusao: o recurso estudado deve funcionar e estar marcado de forma semantica e compreensivel.'
-      else 'Criterio de conclusao: a pagina deve estar revisada, organizada e pronta para validacao ou publicacao.'
-    end,
-    'Ao finalizar, salve uma versao do arquivo e anote uma melhoria concreta para aplicar na proxima aula.'
-  ], E'\n'),
-  a.duracao_minutos,
-  a.aula_ordem,
+  ap.turma_id,
+  ap.modulo_id,
+  ap.titulo,
+  ap.descricao,
+  ap.duracao_minutos,
+  ap.aula_ordem,
   null,
   true
-from curso c
-join public.turma_modulo tm on tm.turma_id = c.id
-join aulas a on a.modulo_ordem = tm.ordem
+from aulas_payload ap
 where not exists (
   select 1
   from public.turma_aula ta
-  where ta.turma_id = c.id
-    and ta.modulo_id = tm.id
-    and ta.ordem = a.aula_ordem
+  where ta.turma_id = ap.turma_id
+    and ta.modulo_id = ap.modulo_id
+    and ta.ordem = ap.aula_ordem
 );
 
 commit;
