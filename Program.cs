@@ -3242,6 +3242,12 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
         return Results.BadRequest(new { mensagem = "E-mail inválido." });
     }
 
+    var shouldUpdatePassword = !string.IsNullOrWhiteSpace(payload.Password);
+    if (shouldUpdatePassword && payload.Password!.Trim().Length < 4)
+    {
+        return Results.BadRequest(new { mensagem = "A nova senha deve ter pelo menos 4 caracteres." });
+    }
+
     if (!DateTime.TryParse(payload.BirthDate, out var parsedBirthDate))
     {
         if (!DateTime.TryParseExact(payload.BirthDate,
@@ -3279,6 +3285,7 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
                         ? "(inactive_at is null)"
                         : "true";
         var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
+        var passwordSetSql = shouldUpdatePassword ? ", password_hash = @password_hash" : string.Empty;
         var updatedAtSetSql = hasUsersUpdatedAt ? ", updated_at = now()" : string.Empty;
 
         var sql = $@"
@@ -3288,6 +3295,7 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
                 birth_date = @birth_date,
                 sex = @sex,
                 email = @email
+                {passwordSetSql}
                 {updatedAtSetSql}
             where id = @id
             returning
@@ -3305,6 +3313,10 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
         cmd.Parameters.AddWithValue("@birth_date", parsedBirthDate.Date);
         cmd.Parameters.AddWithValue("@sex", payload.Sex.Trim());
         cmd.Parameters.AddWithValue("@email", payload.Email.Trim());
+        if (shouldUpdatePassword)
+        {
+            cmd.Parameters.AddWithValue("@password_hash", payload.Password!.Trim());
+        }
 
         await using var reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
@@ -3526,7 +3538,7 @@ record AvaliacaoRespostaCreateRequest(long? AlunoId, string? AlunoNome, List<Ava
 record AccessLogCreateRequest(long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? Referrer, string? UserAgent, int? StatusCode, Dictionary<string, object?>? Metadata);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
-record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email);
+record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email, string? Password);
 record BootstrapAdminRequest(long UserId);
 record UserRoleAssignRequest(string PerfilCodigo, bool Principal, string? Observacao);
 
