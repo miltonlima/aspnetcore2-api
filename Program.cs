@@ -1,7 +1,8 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.FileProviders;
 using Npgsql;
 
 // Inicializa o host e carrega configurações/serviços básicos do ASP.NET Core.
@@ -115,6 +116,23 @@ var hasUsersActive = userColumns.Contains("active");
 var hasUsersStatus = userColumns.Contains("status");
 var hasUsersInactiveAt = userColumns.Contains("inactive_at");
 var hasUsersUpdatedAt = userColumns.Contains("updated_at");
+var hasUsersImgPerfil = userColumns.Contains("img_perfil");
+const long MaxProfileImageBytes = 1024 * 1024;
+var allowedProfileImageTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif"
+};
+var allowedProfileImageExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif"
+};
 
 var hasPerfilAcessoTable = false;
 var hasUsuarioPerfilAcessoTable = false;
@@ -251,6 +269,14 @@ async Task<IResult?> AuthorizeByRoleAsync(HttpRequest request, params string[] a
 
 // Aplica CORS antes de demais middlewares para garantir cabeçalhos em erros.
 app.UseCors("AllowFrontend");
+app.UseStaticFiles();
+var uploadsStaticPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "uploads");
+Directory.CreateDirectory(uploadsStaticPath);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadsStaticPath),
+    RequestPath = "/uploads"
+});
 
 // Configure the HTTP request pipeline.
 // Publica o JSON OpenAPI e a interface do Swagger UI.
@@ -2588,8 +2614,14 @@ app.MapPost("/login", async (LoginRequest? login) =>
         DateTime birthDate;
         string sex;
         string email;
+        string? imgPerfil;
 
-        await using var cmd = dataSource.CreateCommand("select id, full_name, birth_date, sex, email, password_hash from public.users where email = @email limit 1");
+        var loginImgPerfilSql = hasUsersImgPerfil ? "img_perfil" : "null::text";
+        await using var cmd = dataSource.CreateCommand($@"
+            select id, full_name, birth_date, sex, email, password_hash, {loginImgPerfilSql} as img_perfil
+            from public.users
+            where email = @email
+            limit 1");
         cmd.Parameters.AddWithValue("@email", login.Email.Trim());
 
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -2619,6 +2651,8 @@ app.MapPost("/login", async (LoginRequest? login) =>
         birthDate = reader.GetDateTime(reader.GetOrdinal("birth_date"));
         sex = reader.GetString(reader.GetOrdinal("sex"));
         email = reader.GetString(reader.GetOrdinal("email"));
+        var imgPerfilOrdinal = reader.GetOrdinal("img_perfil");
+        imgPerfil = reader.IsDBNull(imgPerfilOrdinal) ? null : reader.GetString(imgPerfilOrdinal);
         await reader.DisposeAsync();
 
         var roleCodes = await GetUserRoleCodesAsync(userId);
@@ -2631,6 +2665,7 @@ app.MapPost("/login", async (LoginRequest? login) =>
             birth_date = birthDate,
             sex,
             email,
+            img_perfil = imgPerfil,
             perfil = perfilPrincipal,
             perfis = roleCodes.Count > 0 ? roleCodes.ToArray() : new[] { "ALUNO" }
         };
@@ -3174,6 +3209,7 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
                         ? "(inactive_at is null)"
                         : "true";
         var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
+        var imgPerfilSql = hasUsersImgPerfil ? "img_perfil" : "null::text";
 
         var sql = $@"
             select
@@ -3182,6 +3218,7 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
                 coalesce(birth_date, date '1900-01-01') as birth_date,
                 coalesce(sex, '') as sex,
                 coalesce(email, '') as email,
+                {imgPerfilSql} as img_perfil,
                 {statusSql} as is_active,
                 {inactiveAtSql} as inactive_at
             from public.users
@@ -3197,6 +3234,7 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
         }
 
         var inactiveAtOrdinal = reader.GetOrdinal("inactive_at");
+        var imgPerfilOrdinal = reader.GetOrdinal("img_perfil");
 
         var aluno = new StudentDetail(
             reader.GetInt64(reader.GetOrdinal("id")),
@@ -3205,7 +3243,8 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
             reader.GetString(reader.GetOrdinal("sex")),
             reader.GetString(reader.GetOrdinal("email")),
             reader.GetBoolean(reader.GetOrdinal("is_active")),
-            reader.IsDBNull(inactiveAtOrdinal) ? null : reader.GetDateTime(inactiveAtOrdinal)
+            reader.IsDBNull(inactiveAtOrdinal) ? null : reader.GetDateTime(inactiveAtOrdinal),
+            reader.IsDBNull(imgPerfilOrdinal) ? null : reader.GetString(imgPerfilOrdinal)
         );
 
         return Results.Ok(aluno);
@@ -3218,7 +3257,7 @@ app.MapGet("/api/alunos/{id:long}", async (long id) =>
 }).WithName("GetAlunoById");
 
 // Atualiza dados cadastrais de um aluno.
-app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payload) =>
+app.MapPut("/api/alunos/{id:long}", async (HttpRequest request, long id) =>
 {
     if (!hasUsersTable)
     {
@@ -3226,6 +3265,27 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
             detail: "Tabela public.users não encontrada no banco.",
             title: "Regra de negócio indisponível",
             statusCode: 500);
+    }
+
+    StudentUpdateRequest? payload;
+    IFormFile? profileImage = null;
+
+    if (request.HasFormContentType)
+    {
+        var form = await request.ReadFormAsync();
+        payload = new StudentUpdateRequest(
+            form["fullName"].FirstOrDefault() ?? string.Empty,
+            form["birthDate"].FirstOrDefault() ?? string.Empty,
+            form["sex"].FirstOrDefault() ?? string.Empty,
+            form["email"].FirstOrDefault() ?? string.Empty,
+            form["password"].FirstOrDefault());
+        profileImage = form.Files["imgPerfil"] ?? form.Files["img_perfil"] ?? form.Files["profileImage"];
+    }
+    else
+    {
+        payload = await JsonSerializer.DeserializeAsync<StudentUpdateRequest>(
+            request.Body,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     }
 
     if (payload is null ||
@@ -3246,6 +3306,35 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
     if (shouldUpdatePassword && payload.Password!.Trim().Length < 4)
     {
         return Results.BadRequest(new { mensagem = "A nova senha deve ter pelo menos 4 caracteres." });
+    }
+
+    if (profileImage is not null)
+    {
+        if (!hasUsersImgPerfil)
+        {
+            return Results.Problem(
+                detail: "Coluna public.users.img_perfil não encontrada. Execute o script 13_alter_users_add_img_perfil.sql no Supabase.",
+                title: "Campo de imagem de perfil ausente",
+                statusCode: 500);
+        }
+
+        if (profileImage.Length <= 0)
+        {
+            return Results.BadRequest(new { mensagem = "Imagem de perfil inválida." });
+        }
+
+        if (profileImage.Length > MaxProfileImageBytes)
+        {
+            return Results.BadRequest(new { mensagem = "A imagem de perfil deve ter no máximo 1 MB." });
+        }
+
+        var extension = Path.GetExtension(profileImage.FileName);
+        if (string.IsNullOrWhiteSpace(extension) ||
+            !allowedProfileImageExtensions.Contains(extension) ||
+            !allowedProfileImageTypes.Contains(profileImage.ContentType))
+        {
+            return Results.BadRequest(new { mensagem = "Envie uma imagem válida nos formatos JPG, PNG, WEBP ou GIF." });
+        }
     }
 
     if (!DateTime.TryParse(payload.BirthDate, out var parsedBirthDate))
@@ -3275,6 +3364,27 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
             return Results.BadRequest(new { mensagem = "Já existe um aluno com este e-mail." });
         }
 
+        string? imgPerfilPath = null;
+        if (profileImage is not null)
+        {
+            var webRoot = app.Environment.WebRootPath;
+            if (string.IsNullOrWhiteSpace(webRoot))
+            {
+                webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+            }
+
+            var uploadDirectory = Path.Combine(webRoot, "uploads", "perfis");
+            Directory.CreateDirectory(uploadDirectory);
+
+            var extension = Path.GetExtension(profileImage.FileName).ToLowerInvariant();
+            var fileName = $"usuario-{id}-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}{extension}";
+            var absolutePath = Path.Combine(uploadDirectory, fileName);
+
+            await using var fileStream = File.Create(absolutePath);
+            await profileImage.CopyToAsync(fileStream);
+            imgPerfilPath = $"/uploads/perfis/{fileName}";
+        }
+
         var statusSql = hasUsersIsActive
             ? "coalesce(is_active, true)"
             : hasUsersActive
@@ -3286,6 +3396,8 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
                         : "true";
         var inactiveAtSql = hasUsersInactiveAt ? "inactive_at" : "null::timestamp";
         var passwordSetSql = shouldUpdatePassword ? ", password_hash = @password_hash" : string.Empty;
+        var imgPerfilSetSql = !string.IsNullOrWhiteSpace(imgPerfilPath) ? ", img_perfil = @img_perfil" : string.Empty;
+        var imgPerfilSql = hasUsersImgPerfil ? "img_perfil" : "null::text";
         var updatedAtSetSql = hasUsersUpdatedAt ? ", updated_at = now()" : string.Empty;
 
         var sql = $@"
@@ -3296,6 +3408,7 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
                 sex = @sex,
                 email = @email
                 {passwordSetSql}
+                {imgPerfilSetSql}
                 {updatedAtSetSql}
             where id = @id
             returning
@@ -3304,6 +3417,7 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
                 birth_date,
                 sex,
                 email,
+                {imgPerfilSql} as img_perfil,
                 {statusSql} as is_active,
                 {inactiveAtSql} as inactive_at";
 
@@ -3317,6 +3431,10 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
         {
             cmd.Parameters.AddWithValue("@password_hash", payload.Password!.Trim());
         }
+        if (!string.IsNullOrWhiteSpace(imgPerfilPath))
+        {
+            cmd.Parameters.AddWithValue("@img_perfil", imgPerfilPath);
+        }
 
         await using var reader = await cmd.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
@@ -3325,6 +3443,7 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
         }
 
         var inactiveAtOrdinal = reader.GetOrdinal("inactive_at");
+        var imgPerfilOrdinal = reader.GetOrdinal("img_perfil");
 
         var aluno = new StudentDetail(
             reader.GetInt64(reader.GetOrdinal("id")),
@@ -3333,7 +3452,8 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
             reader.GetString(reader.GetOrdinal("sex")),
             reader.GetString(reader.GetOrdinal("email")),
             reader.GetBoolean(reader.GetOrdinal("is_active")),
-            reader.IsDBNull(inactiveAtOrdinal) ? null : reader.GetDateTime(inactiveAtOrdinal)
+            reader.IsDBNull(inactiveAtOrdinal) ? null : reader.GetDateTime(inactiveAtOrdinal),
+            reader.IsDBNull(imgPerfilOrdinal) ? null : reader.GetString(imgPerfilOrdinal)
         );
 
         return Results.Ok(new { mensagem = "Aluno atualizado com sucesso.", aluno });
@@ -3344,7 +3464,6 @@ app.MapPut("/api/alunos/{id:long}", async (long id, StudentUpdateRequest? payloa
         return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
     }
 }).WithName("UpdateAluno");
-
 // Inativa aluno (soft delete) usando colunas de status quando disponíveis.
 app.MapDelete("/api/alunos/{id:long}/inativar", async (long id) =>
 {
@@ -3537,10 +3656,14 @@ record AvaliacaoRespostaItemRequest(long PerguntaId, long AlternativaId);
 record AvaliacaoRespostaCreateRequest(long? AlunoId, string? AlunoNome, List<AvaliacaoRespostaItemRequest>? Respostas);
 record AccessLogCreateRequest(long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? Referrer, string? UserAgent, int? StatusCode, Dictionary<string, object?>? Metadata);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
-record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt);
+record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt, string? ImgPerfil);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email, string? Password);
 record BootstrapAdminRequest(long UserId);
 record UserRoleAssignRequest(string PerfilCodigo, bool Principal, string? Observacao);
+
+
+
+
 
 
 
