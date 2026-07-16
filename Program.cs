@@ -2496,6 +2496,94 @@ app.MapPost("/api/inscricoes", async (InscricaoCreate? payload) =>
     }
 }).WithName("CreateInscricao");
 
+// Consulta logs de acesso do frontend em public.access_log.
+app.MapGet("/api/access-logs", async (string? search, string? action, string? pagePath, int? limit) =>
+{
+    try
+    {
+        var take = Math.Clamp(limit.GetValueOrDefault(100), 1, 500);
+
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                id,
+                user_id,
+                user_email,
+                user_name,
+                user_type,
+                session_id,
+                page_path,
+                page_title,
+                action,
+                http_method,
+                ip_address::text,
+                user_agent,
+                referrer,
+                status_code,
+                metadata::text,
+                created_at
+            from public.access_log
+            where (
+                @search is null
+                or lower(
+                    coalesce(user_email, '') || ' ' ||
+                    coalesce(user_name, '') || ' ' ||
+                    coalesce(user_type, '') || ' ' ||
+                    coalesce(page_path, '') || ' ' ||
+                    coalesce(page_title, '') || ' ' ||
+                    coalesce(action, '') || ' ' ||
+                    coalesce(ip_address::text, '')
+                ) like '%' || lower(@search) || '%'
+            )
+            and (@action is null or action = @action)
+            and (@page_path is null or page_path = @page_path)
+            order by created_at desc, id desc
+            limit @limit");
+
+        cmd.Parameters.AddWithValue("@search", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(search) ? DBNull.Value : search.Trim());
+        cmd.Parameters.AddWithValue("@action", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(action) ? DBNull.Value : action.Trim());
+        cmd.Parameters.AddWithValue("@page_path", NpgsqlTypes.NpgsqlDbType.Text, string.IsNullOrWhiteSpace(pagePath) ? DBNull.Value : pagePath.Trim());
+        cmd.Parameters.AddWithValue("@limit", NpgsqlTypes.NpgsqlDbType.Integer, take);
+
+        var logs = new List<AccessLogListItem>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            logs.Add(new AccessLogListItem(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12),
+                reader.IsDBNull(13) ? null : reader.GetInt32(13),
+                reader.IsDBNull(14) ? null : reader.GetString(14),
+                reader.GetDateTime(15)
+            ));
+        }
+
+        return Results.Ok(logs);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabela public.access_log nao encontrada. Execute o script sql/09_create_access_logs.sql no Supabase.",
+            title: "Estrutura de logs ausente",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/access-logs: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListAccessLogs");
+
 // Registra logs de acesso do frontend em public.access_log.
 app.MapPost("/api/access-logs", async (HttpRequest request, AccessLogCreateRequest? payload) =>
 {
@@ -3655,6 +3743,7 @@ record AvaliacaoRespostaDto(long Id, long? AlunoId, string? AlunoNome, int Total
 record AvaliacaoRespostaItemRequest(long PerguntaId, long AlternativaId);
 record AvaliacaoRespostaCreateRequest(long? AlunoId, string? AlunoNome, List<AvaliacaoRespostaItemRequest>? Respostas);
 record AccessLogCreateRequest(long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? Referrer, string? UserAgent, int? StatusCode, Dictionary<string, object?>? Metadata);
+record AccessLogListItem(long Id, long? UserId, string? UserEmail, string? UserName, string? UserType, string? SessionId, string PagePath, string? PageTitle, string Action, string? HttpMethod, string? IpAddress, string? UserAgent, string? Referrer, int? StatusCode, string? Metadata, DateTime CreatedAt);
 record StudentListItem(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive);
 record StudentDetail(long Id, string FullName, DateTime BirthDate, string Sex, string Email, bool IsActive, DateTime? InactiveAt, string? ImgPerfil);
 record StudentUpdateRequest(string FullName, string BirthDate, string Sex, string Email, string? Password);
