@@ -1164,6 +1164,207 @@ app.MapDelete("/api/perguntas/{id:long}", async (long id) =>
     }
 }).WithName("DeletePergunta");
 
+app.MapGet("/api/turmas/{turmaId:long}/perguntas-curso", async (long turmaId) =>
+{
+    if (turmaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Curso invalido." });
+    }
+
+    try
+    {
+        var perguntas = new Dictionary<long, PerguntaCursoDto>();
+        await using var cmd = dataSource.CreateCommand(@"
+            select
+                p.id,
+                p.id_curso,
+                p.enunciado,
+                p.dificuldade,
+                p.status,
+                p.created_at,
+                p.updated_at,
+                a.id as alternativa_id,
+                a.texto,
+                a.correta,
+                a.ordem
+            from public.pergunta_curso p
+            left join public.alternativa_curso a on a.pergunta_id = p.id
+            where p.id_curso = @turma_id
+            order by p.id desc, a.ordem asc, a.id asc");
+        cmd.Parameters.AddWithValue("@turma_id", turmaId);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var perguntaId = reader.GetInt64(0);
+            if (!perguntas.TryGetValue(perguntaId, out var pergunta))
+            {
+                pergunta = new PerguntaCursoDto(
+                    perguntaId,
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    new List<AlternativaDto>(),
+                    reader.GetDateTime(5),
+                    reader.GetDateTime(6));
+                perguntas.Add(perguntaId, pergunta);
+            }
+
+            if (!reader.IsDBNull(7))
+            {
+                pergunta.Alternativas.Add(new AlternativaDto(
+                    reader.GetInt64(7),
+                    reader.GetString(8),
+                    reader.GetBoolean(9),
+                    reader.GetInt32(10)));
+            }
+        }
+
+        return Results.Ok(perguntas.Values);
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        return Results.Problem(
+            detail: "Tabelas public.pergunta_curso/public.alternativa_curso nao encontradas. Execute o script sql/14_create_pergunta_curso_alternativa_curso.sql no Supabase.",
+            title: "Estrutura de banco indisponivel",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro GET /api/turmas/{turmaId}/perguntas-curso: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("ListPerguntasCurso");
+
+app.MapPost("/api/turmas/{turmaId:long}/perguntas-curso/copiar", async (long turmaId, PerguntaCursoCopyRequest? payload) =>
+{
+    if (turmaId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Curso invalido." });
+    }
+
+    var perguntaIds = (payload?.PerguntaIds ?? new List<long>())
+        .Where(id => id > 0)
+        .Distinct()
+        .ToList();
+
+    if (perguntaIds.Count == 0)
+    {
+        return Results.BadRequest(new { mensagem = "Selecione pelo menos uma pergunta para copiar." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        await using (var turmaCmd = new NpgsqlCommand("select 1 from public.turma where id = @id limit 1", conn, tx))
+        {
+            turmaCmd.Parameters.AddWithValue("@id", turmaId);
+            var turmaExiste = await turmaCmd.ExecuteScalarAsync();
+            if (turmaExiste is null)
+            {
+                await tx.RollbackAsync();
+                return Results.NotFound(new { mensagem = "Curso nao encontrado." });
+            }
+        }
+
+        var copiadas = 0;
+        var ignoradas = 0;
+        var naoEncontradas = 0;
+        var perguntasCursoIds = new List<long>();
+
+        foreach (var perguntaOrigemId in perguntaIds)
+        {
+            long perguntaCursoId;
+            string enunciado;
+            string dificuldade;
+            string status;
+
+            await using (var perguntaOrigemCmd = new NpgsqlCommand(@"
+                select enunciado, dificuldade, status
+                from public.pergunta
+                where id = @id", conn, tx))
+            {
+                perguntaOrigemCmd.Parameters.AddWithValue("@id", perguntaOrigemId);
+
+                await using var perguntaReader = await perguntaOrigemCmd.ExecuteReaderAsync();
+                if (!await perguntaReader.ReadAsync())
+                {
+                    naoEncontradas++;
+                    continue;
+                }
+
+                enunciado = perguntaReader.GetString(0);
+                dificuldade = perguntaReader.GetString(1);
+                status = perguntaReader.GetString(2);
+            }
+
+            await using (var existenteCmd = new NpgsqlCommand(@"
+                select id
+                from public.pergunta_curso
+                where id_curso = @id_curso
+                  and lower(trim(enunciado)) = lower(trim(@enunciado))
+                limit 1", conn, tx))
+            {
+                existenteCmd.Parameters.AddWithValue("@id_curso", turmaId);
+                existenteCmd.Parameters.AddWithValue("@enunciado", enunciado);
+                var existente = await existenteCmd.ExecuteScalarAsync();
+                if (existente is not null)
+                {
+                    ignoradas++;
+                    continue;
+                }
+            }
+
+            await using (var perguntaCursoCmd = new NpgsqlCommand(@"
+                insert into public.pergunta_curso (id_curso, enunciado, dificuldade, status)
+                values (@id_curso, @enunciado, @dificuldade, @status)
+                returning id", conn, tx))
+            {
+                perguntaCursoCmd.Parameters.AddWithValue("@id_curso", turmaId);
+                perguntaCursoCmd.Parameters.AddWithValue("@enunciado", enunciado);
+                perguntaCursoCmd.Parameters.AddWithValue("@dificuldade", dificuldade);
+                perguntaCursoCmd.Parameters.AddWithValue("@status", status);
+                perguntaCursoId = (long)(await perguntaCursoCmd.ExecuteScalarAsync() ?? 0L);
+            }
+
+            await using (var alternativasCmd = new NpgsqlCommand(@"
+                insert into public.alternativa_curso (pergunta_id, texto, correta, ordem)
+                select @pergunta_curso_id, texto, correta, ordem
+                from public.alternativa
+                where pergunta_id = @pergunta_origem_id
+                order by ordem asc, id asc", conn, tx))
+            {
+                alternativasCmd.Parameters.AddWithValue("@pergunta_curso_id", perguntaCursoId);
+                alternativasCmd.Parameters.AddWithValue("@pergunta_origem_id", perguntaOrigemId);
+                await alternativasCmd.ExecuteNonQueryAsync();
+            }
+
+            copiadas++;
+            perguntasCursoIds.Add(perguntaCursoId);
+        }
+
+        await tx.CommitAsync();
+        return Results.Ok(new PerguntaCursoCopyResult(copiadas, ignoradas, naoEncontradas, perguntasCursoIds));
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        await tx.RollbackAsync();
+        return Results.Problem(
+            detail: "Tabelas public.pergunta_curso/public.alternativa_curso nao encontradas. Execute o script sql/14_create_pergunta_curso_alternativa_curso.sql no Supabase.",
+            title: "Estrutura de banco indisponivel",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro POST /api/turmas/{turmaId}/perguntas-curso/copiar: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("CopyPerguntasCurso");
+
 app.MapPost("/api/perguntas/{perguntaId:long}/alternativas", async (long perguntaId, AlternativaUpsertRequest? payload) =>
 {
     if (payload is null || string.IsNullOrWhiteSpace(payload.Texto))
@@ -3736,8 +3937,11 @@ record InscricaoCreate(long AlunoId, long TurmaId);
 record AulaProgressUpsertRequest(long AlunoId, long TurmaId, double Percentual, bool Concluida);
 record AlternativaDto(long Id, string Texto, bool Correta, int Ordem);
 record PerguntaDto(long Id, string Enunciado, string Dificuldade, string Status, List<AlternativaDto> Alternativas, DateTime CreatedAt, DateTime UpdatedAt);
+record PerguntaCursoDto(long Id, long IdCurso, string Enunciado, string Dificuldade, string Status, List<AlternativaDto> Alternativas, DateTime CreatedAt, DateTime UpdatedAt);
 record AlternativaUpsertRequest(long? Id, string Texto, bool Correta, int Ordem);
 record PerguntaUpsertRequest(string Enunciado, string Dificuldade, string Status, List<AlternativaUpsertRequest>? Alternativas);
+record PerguntaCursoCopyRequest(List<long>? PerguntaIds);
+record PerguntaCursoCopyResult(int Copiadas, int Ignoradas, int NaoEncontradas, List<long> PerguntasCursoIds);
 record AvaliacaoRespostaItemDto(long Id, long PerguntaId, long AlternativaId, bool Correta);
 record AvaliacaoRespostaDto(long Id, long? AlunoId, string? AlunoNome, int TotalPerguntas, int TotalCorretas, decimal Percentual, string Status, DateTime CreatedAt, List<AvaliacaoRespostaItemDto> Itens);
 record AvaliacaoRespostaItemRequest(long PerguntaId, long AlternativaId);
