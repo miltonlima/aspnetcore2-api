@@ -1365,6 +1365,83 @@ app.MapPost("/api/turmas/{turmaId:long}/perguntas-curso/copiar", async (long tur
     }
 }).WithName("CopyPerguntasCurso");
 
+app.MapDelete("/api/turmas/{turmaId:long}/perguntas-curso/{perguntaCursoId:long}", async (long turmaId, long perguntaCursoId) =>
+{
+    if (turmaId <= 0 || perguntaCursoId <= 0)
+    {
+        return Results.BadRequest(new { mensagem = "Curso ou pergunta invalida." });
+    }
+
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var tx = await conn.BeginTransactionAsync();
+
+    try
+    {
+        await using (var perguntaCmd = new NpgsqlCommand(@"
+            select 1
+            from public.pergunta_curso
+            where id = @pergunta_id
+              and id_curso = @turma_id
+            limit 1", conn, tx))
+        {
+            perguntaCmd.Parameters.AddWithValue("@pergunta_id", perguntaCursoId);
+            perguntaCmd.Parameters.AddWithValue("@turma_id", turmaId);
+            var perguntaExiste = await perguntaCmd.ExecuteScalarAsync();
+            if (perguntaExiste is null)
+            {
+                await tx.RollbackAsync();
+                return Results.NotFound(new { mensagem = "Pergunta vinculada ao curso nao encontrada." });
+            }
+        }
+
+        await using (var respostasCmd = new NpgsqlCommand(@"
+            select count(*)
+            from public.avaliacao_resposta_item ari
+            where ari.pergunta_id = @pergunta_id
+               or ari.alternativa_id in (
+                    select ac.id
+                    from public.alternativa_curso ac
+                    where ac.pergunta_id = @pergunta_id
+               )", conn, tx))
+        {
+            respostasCmd.Parameters.AddWithValue("@pergunta_id", perguntaCursoId);
+            var totalRespostas = Convert.ToInt64(await respostasCmd.ExecuteScalarAsync() ?? 0L);
+            if (totalRespostas > 0)
+            {
+                await tx.RollbackAsync();
+                return Results.Conflict(new { mensagem = "Esta pergunta ja possui respostas registradas e nao pode ser excluida." });
+            }
+        }
+
+        await using (var deleteCmd = new NpgsqlCommand(@"
+            delete from public.pergunta_curso
+            where id = @pergunta_id
+              and id_curso = @turma_id", conn, tx))
+        {
+            deleteCmd.Parameters.AddWithValue("@pergunta_id", perguntaCursoId);
+            deleteCmd.Parameters.AddWithValue("@turma_id", turmaId);
+            await deleteCmd.ExecuteNonQueryAsync();
+        }
+
+        await tx.CommitAsync();
+        return Results.Ok(new { mensagem = "Pergunta removida do banco do curso." });
+    }
+    catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+    {
+        await tx.RollbackAsync();
+        return Results.Problem(
+            detail: "Tabelas public.pergunta_curso/public.alternativa_curso ou tabelas de respostas nao encontradas. Execute os scripts SQL mais recentes no Supabase.",
+            title: "Estrutura de banco indisponivel",
+            statusCode: 500);
+    }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        Console.WriteLine($"Erro DELETE /api/turmas/{turmaId}/perguntas-curso/{perguntaCursoId}: {ex.Message}\n{ex.StackTrace}");
+        return Results.Problem(detail: ex.Message, title: "Internal Server Error", statusCode: 500);
+    }
+}).WithName("DeletePerguntaCurso");
+
 app.MapPost("/api/perguntas/{perguntaId:long}/alternativas", async (long perguntaId, AlternativaUpsertRequest? payload) =>
 {
     if (payload is null || string.IsNullOrWhiteSpace(payload.Texto))
